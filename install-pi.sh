@@ -45,7 +45,7 @@ then
     exit 1
 fi
 apt-get update
-apt-get install -y python3 gunicorn ca-certificates tzdata
+apt-get install -y python3 python3-psycopg gunicorn ca-certificates tzdata
 # Deny direct Apache access BEFORE any private application files enter the web root.
 cp "$SOURCE_DIR/deploy/suncity-protect.conf" /etc/apache2/conf-available/suncity-protect.conf
 a2enconf suncity-protect

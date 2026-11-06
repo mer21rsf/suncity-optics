@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends python3 gunicorn ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-psycopg gunicorn ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY app.py docx_import.py ./
+COPY app.py docx_import.py persistence.py cloud_media.py data_tools.py mailer.py migrate_to_supabase.py backup_local.py ./
 COPY index.html admin.html style.css site.js admin.js eyewear.svg ./
 RUN mkdir /data && chown www-data:www-data /data
 ENV SUNCITY_DATA=/data

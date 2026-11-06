@@ -5,34 +5,22 @@ from zoneinfo import ZoneInfo
 from http.cookies import SimpleCookie
 from email.message import EmailMessage
 from docx_import import convert, safe_url
+from persistence import connect, initialize, cloud_enabled, StorageUnavailable
+from cloud_media import MediaStore
+from data_tools import backup_bytes
+from mailer import send_https
 BASE=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('SUNCITY_DATA',str(BASE/'data'))); DATA.mkdir(parents=True,exist_ok=True,mode=0o700)
-MEDIA=DATA/'media'; MEDIA.mkdir(exist_ok=True)
+MEDIA_DIR=DATA/'media'; MEDIA_DIR.mkdir(exist_ok=True)
+MEDIA=MediaStore(MEDIA_DIR)
 ORIGIN=(os.environ.get('PUBLIC_ORIGIN') or os.environ.get('RENDER_EXTERNAL_URL') or 'http://localhost:8090').rstrip('/')
 TZ=ZoneInfo('America/Vancouver')
 SERVICES=[{'name':n,'minutes':m,'description':d} for n,m,d in [('Eyeglasses Adjustment',30,'A better fit, a little more comfort.'),('Contact Lens Fitting',30,'Find a fit that feels right for you.'),('Safety Glasses Fitting',60,'Practical protection for your working day.'),('Sight Test',60,'Make time for your vision needs.'),('Eyewear Shopping',60,'Explore frames and find your next favourite.'),('Lens Change or Upgrade',60,'Give your everyday eyewear a fresh perspective.')]]
 DEFAULT={'name':'Sun City Optics','eyebrow':'YOUR NEIGHBOURHOOD OPTICAL · SURREY, BC','headline':'See beautifully.\nLive brightly.','intro':'Find frames that feel like you. Discover thoughtfully chosen eyewear and friendly, personal service in the heart of Newton.','about':'Your view of the world deserves a little care. We bring together a wide choice of frames and lenses, accessible prices, and a friendly team to help you find your fit.','phone':'+1 604 355 1337','email':'suncityoptics@gmail.com','address':'Unit 125, 7135 138 Street, Surrey, BC V3W 7T9','facebook':'https://www.facebook.com/suncityoptics.surrey/','setmore':'https://suncityoptics.setmore.com/','hours':['11:00–15:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','08:00–16:00'],'services':SERVICES,'recipients':['','',''],'accent':'#d27140','hero_image':'','page_mode':'designed','doc_draft':'','doc_live':''}
-def db():
-    c=sqlite3.connect(DATA/'site.sqlite3',timeout=20);c.row_factory=sqlite3.Row;return c
+def db():return connect(DATA)
 def init():
-    with db() as c:
-        c.executescript('''CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS admins(username TEXT PRIMARY KEY,salt TEXT,hash TEXT);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,csrf TEXT,expires REAL);
-CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY,count INTEGER,until REAL);
-CREATE TABLE IF NOT EXISTS employees(id INTEGER PRIMARY KEY,name TEXT,role TEXT,email TEXT,phone TEXT,bio TEXT,public INTEGER);
-CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,name TEXT,email TEXT,phone TEXT,service TEXT,day TEXT,time TEXT,status TEXT DEFAULT 'Requested',employee INTEGER,created TEXT);
-CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,name TEXT,email TEXT,message TEXT,status TEXT DEFAULT 'Unread',created TEXT);
-CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY,recipient TEXT,kind TEXT,record_id INTEGER,sent REAL,attempts INTEGER DEFAULT 0,error TEXT DEFAULT '',lease REAL DEFAULT 0);''')
-        c.execute('BEGIN IMMEDIATE')
-        for name,definition in [('role',"TEXT DEFAULT 'admin'"),('display_name',"TEXT DEFAULT ''"),('enabled','INTEGER DEFAULT 1'),('must_change','INTEGER DEFAULT 0')]:
-            if name not in {r[1] for r in c.execute('PRAGMA table_info(admins)')}:
-                c.execute('ALTER TABLE admins ADD COLUMN '+name+' '+definition)
-        if 'username' not in {r[1] for r in c.execute('PRAGMA table_info(sessions)')}:
-            c.execute('ALTER TABLE sessions ADD COLUMN username TEXT')
-            c.execute('DELETE FROM sessions')
-        c.execute('CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,created TEXT,actor TEXT,action TEXT,details TEXT)')
-        c.execute('INSERT OR IGNORE INTO settings VALUES(1,?)',(json.dumps(DEFAULT),))
+    initialize(DATA,DEFAULT)
+    if cloud_enabled():MEDIA.check()
 init()
 def settings():
     with db() as c:return {**DEFAULT,**json.loads(c.execute('SELECT value FROM settings WHERE id=1').fetchone()[0])}
@@ -63,8 +51,9 @@ def queue(c,kind,rid):
     for recipient in settings()['recipients']:
         if recipient:c.execute('INSERT INTO outbox(recipient,kind,record_id) VALUES(?,?,?)',(recipient,kind,rid))
 def process_mail():
-    host=os.environ.get('SMTP_HOST'); sender=os.environ.get('SMTP_FROM'); user=os.environ.get('SMTP_USER'); password=os.environ.get('SMTP_PASSWORD')
-    if not host or not sender:return
+    host=os.environ.get('SMTP_HOST'); sender=os.environ.get('MAIL_FROM') or os.environ.get('SMTP_FROM'); user=os.environ.get('SMTP_USER'); password=os.environ.get('SMTP_PASSWORD')
+    https_mail=bool(os.environ.get('RESEND_API_KEY'))
+    if not sender or not (host or https_mail):return
     # Claim each item briefly; never hold a database write lock during SMTP I/O.
     for _ in range(30):
         with db() as c:
@@ -75,13 +64,16 @@ def process_mail():
         try:
             msg=EmailMessage();msg['From']=sender;msg['To']=row['recipient'];msg['Subject']='Sun City Optics — new '+row['kind']
             msg.set_content('A new '+row['kind']+' is waiting in your secure admin dashboard.\n\n'+ORIGIN+'/suncityoptics/admin\n\nReference: '+str(row['record_id'])+'\nCustomer details are available after signing in.')
-            port=int(os.environ.get('SMTP_PORT','587'))
-            if port==465: server=smtplib.SMTP_SSL(host,port,timeout=15,context=ssl.create_default_context())
+            if https_mail:
+                send_https(msg,'suncity-'+hashlib.sha256(ORIGIN.encode()).hexdigest()[:12]+'-'+str(row['id']))
             else:
-                server=smtplib.SMTP(host,port,timeout=15);server.ehlo();server.starttls(context=ssl.create_default_context());server.ehlo()
-            with server:
-                if user:server.login(user,password or '')
-                server.send_message(msg)
+                port=int(os.environ.get('SMTP_PORT','587'))
+                if port==465: server=smtplib.SMTP_SSL(host,port,timeout=15,context=ssl.create_default_context())
+                else:
+                    server=smtplib.SMTP(host,port,timeout=15);server.ehlo();server.starttls(context=ssl.create_default_context());server.ehlo()
+                with server:
+                    if user:server.login(user,password or '')
+                    server.send_message(msg)
             with db() as c:c.execute("UPDATE outbox SET sent=?,lease=0,error='' WHERE id=?",(time.time(),row['id']))
         except Exception:
             with db() as c:c.execute('UPDATE outbox SET lease=?,error=? WHERE id=?',(time.time()+60,'Delivery failed; check SMTP credentials and server connectivity.',row['id']))
@@ -89,7 +81,7 @@ def process_mail():
 def application(env,start):
     headers=[('X-Content-Type-Options','nosniff'),('Referrer-Policy','strict-origin-when-cross-origin'),('X-Frame-Options','SAMEORIGIN'),('Content-Security-Policy',"default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"),('Cache-Control','no-store')]
     def respond(data,status=200,mime='application/json; charset=utf-8'):
-        b=data if isinstance(data,bytes) else json.dumps(data).encode();start(str(status)+' '+{200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',409:'Conflict',413:'Payload Too Large',429:'Too Many Requests',500:'Server Error'}.get(status,'Error'),headers+[('Content-Type',mime),('Content-Length',str(len(b)))]);return [b]
+        b=data if isinstance(data,bytes) else json.dumps(data).encode();start(str(status)+' '+{200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',409:'Conflict',413:'Payload Too Large',429:'Too Many Requests',500:'Server Error',503:'Service Unavailable'}.get(status,'Error'),headers+[('Content-Type',mime),('Content-Length',str(len(b)))]);return [b]
     path=env.get('PATH_INFO','/')
     if path=='/suncityoptics' or path.startswith('/suncityoptics/'):
         path=path[len('/suncityoptics'):] or '/'
@@ -106,7 +98,7 @@ def application(env,start):
         if method not in ('GET','POST'):return respond({'error':'Unsupported request.'},400)
         if method=='POST':
             if env.get('HTTP_ORIGIN','')!=ORIGIN:return respond({'error':'Origin rejected. Configure PUBLIC_ORIGIN to match this address.'},403)
-            if session and not hmac.compare_digest(env.get('HTTP_X_CSRF_TOKEN',''),session['csrf']):return respond({'error':'Session check failed. Refresh and sign in again.'},403)
+            if session and path.startswith('/api/admin') and not hmac.compare_digest(env.get('HTTP_X_CSRF_TOKEN',''),session['csrf']):return respond({'error':'Session check failed. Refresh and sign in again.'},403)
             length=int(env.get('CONTENT_LENGTH') or 0)
             if length<0 or length>10*1024*1024:return respond({'error':'Upload must be under 10 MB.'},413)
             raw=env['wsgi.input'].read(length)
@@ -187,9 +179,20 @@ def application(env,start):
                     if not message:raise ValueError('Please enter a message.')
                     rid=c.execute('INSERT INTO messages(name,email,message,created) VALUES(?,?,?,?)',(name,address,message,datetime.now(TZ).isoformat())).lastrowid;queue(c,'chat message',rid)
             return respond({'ok':True,'reference':rid})
+        if path=='/api/admin/backup':
+            if session['role']!='admin':return respond({'error':'An administrator account is required.'},403)
+            with db() as c:audit(c,session['username'],'Downloaded private backup')
+            archive=backup_bytes(DATA,MEDIA)
+            headers.append(('Content-Disposition','attachment; filename="suncity-private-backup.zip"'))
+            return respond(archive,mime='application/zip')
+        if path=='/api/admin/storage':
+            if session['role']!='admin':return respond({'error':'An administrator account is required.'},403)
+            with db() as c:c.execute('SELECT 1').fetchone()
+            image_status=MEDIA.check()
+            return respond({'mode':'supabase' if cloud_enabled() else 'local','database':'Available','images':image_status})
         if path=='/api/admin/dashboard':
             with db() as c:
-                return respond({'user':account_info(session),'preview':os.environ.get('IS_FREE_PREVIEW')=='1','settings':settings(),'employees':employees(),'bookings':[dict(r) for r in c.execute('SELECT * FROM bookings ORDER BY day DESC,time DESC')],'messages':[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY id DESC')],'mail':{'configured':bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_FROM')),'queued':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL').fetchone()[0],'failed':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL AND attempts>0').fetchone()[0]}})
+                return respond({'user':account_info(session),'preview':os.environ.get('IS_FREE_PREVIEW')=='1' and not cloud_enabled(),'storage':{'mode':'supabase' if cloud_enabled() else 'local','persistent':cloud_enabled()},'settings':settings(),'employees':employees(),'bookings':[dict(r) for r in c.execute('SELECT * FROM bookings ORDER BY day DESC,time DESC')],'messages':[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY id DESC')],'mail':{'configured':bool((os.environ.get('RESEND_API_KEY') and (os.environ.get('MAIL_FROM') or os.environ.get('SMTP_FROM'))) or (os.environ.get('SMTP_HOST') and os.environ.get('SMTP_FROM'))),'queued':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL').fetchone()[0],'failed':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL AND attempts>0').fetchone()[0]}})
         if path=='/api/admin/settings' and method=='POST':
             if session['role']!='admin' and 'recipients' in body:return respond({'error':'Only administrators can change alert recipients.'},403)
             s=settings();previous=json.loads(json.dumps(s))
@@ -227,6 +230,7 @@ def application(env,start):
         if path=='/api/admin/word' and method=='POST':
             s=settings()
             try:s['doc_draft']=convert(raw,MEDIA)
+            except StorageUnavailable:raise
             except Exception:raise ValueError('This document could not be imported. Use a valid .docx file with embedded PNG/JPEG/GIF/WebP images.')
             save_settings(s,session['username'],'Imported Word draft',{'characters':len(s['doc_draft'])});return respond({'ok':True})
         if path=='/api/admin/word-preview':
@@ -282,13 +286,15 @@ def application(env,start):
         if path.startswith('/media/'):
             name=path[7:]
             if not re.fullmatch(r'[a-f0-9]{64}\.(png|jpg|gif|webp)',name):return respond({'error':'Not found.'},404)
-            file=MEDIA/name
+            try:return respond((MEDIA/name).read_bytes(),mime=mimetypes.guess_type(name)[0] or 'application/octet-stream')
+            except FileNotFoundError:return respond({'error':'Not found.'},404)
         else:
             names={'/':'index.html','/index.html':'index.html','/admin':'admin.html','/admin/':'admin.html','/style.css':'style.css','/site.js':'site.js','/admin.js':'admin.js','/eyewear.svg':'eyewear.svg'}
             if path not in names:return respond({'error':'Not found.'},404)
-            file=BASE/names[path]
+            file=(BASE if (BASE/'index.html').is_file() else BASE/'public')/names[path]
         if not file.is_file():return respond({'error':'Not found.'},404)
         return respond(file.read_bytes(),mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+    except StorageUnavailable as e:return respond({'error':str(e)},503)
     except (ValueError,KeyError,TypeError,OverflowError) as e:return respond({'error':str(e) if isinstance(e,ValueError) else 'Invalid request data.'},400)
     except Exception:
         traceback.print_exc();return respond({'error':'Request failed. Please try again or contact the shop.'},500)
@@ -299,6 +305,16 @@ def employees(public=False):
 def save_settings(s,actor,action,details):
     with db() as c:
         c.execute('UPDATE settings SET value=? WHERE id=1',(json.dumps(s),));audit(c,actor,action,details)
+def start_mail_worker():
+    if os.environ.get('MAIL_AUTORUN')!='1':return
+    import threading
+    def loop():
+        while True:
+            try:process_mail()
+            except Exception:print('Mail queue temporarily unavailable; it will retry.',file=sys.stderr)
+            threading.Event().wait(60)
+    threading.Thread(target=loop,name='suncity-alerts',daemon=True).start()
+start_mail_worker()
 if __name__=='__main__':
     if len(sys.argv)>1 and sys.argv[1]=='setup':
         import getpass
