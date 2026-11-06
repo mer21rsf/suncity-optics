@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=www-data
 Group=www-data
-WorkingDirectory=/opt/suncity-optics
-EnvironmentFile=/etc/suncity-optics.env
+WorkingDirectory=/var/www/html/suncityoptics
+EnvironmentFile=/var/www/html/suncityoptics/site.env
 ExecStart=/usr/bin/python3 -m gunicorn --workers 2 --bind 127.0.0.1:8090 --timeout 45 app:application
 Restart=on-failure
 UMask=0077
@@ -14,7 +14,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/suncity-optics
+ReadWritePaths=/var/www/html/suncityoptics/data
 
 [Install]
 WantedBy=multi-user.target

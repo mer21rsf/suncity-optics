@@ -28,7 +28,7 @@ def convert(raw, media):
                 if ext and len(b)<=8*1024*1024:
                     name=hashlib.sha256(b).hexdigest()+'.'+ext
                     (media/name).write_bytes(b)
-                    out+='<img loading="lazy" alt="Image from the imported Word page" src="/media/'+name+'">'
+                    out+='<img loading="lazy" alt="Image from the imported Word page" src="/suncityoptics/media/'+name+'">'
             return out
         def run(n):
             txt=''.join(html.escape(x.text or '') if x.tag==W+'t' else '<br>' if x.tag==W+'br' else ' ' if x.tag==W+'tab' else '' for x in n.iter())+image(n)

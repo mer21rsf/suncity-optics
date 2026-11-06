@@ -1,153 +1,108 @@
-# Sun City Optics — website & staff studio
+# Sun City Optics — Raspberry Pi web-root edition
 
-A responsive ivory / forest-green website for the Surrey optical shop, prepared by Mervin's request. Includes a complete Python + SQLite backend, without Node.js or PHP. Compatible with Raspberry Pi OS Bookworm, including 32-bit userspace. This package has not been installed on your Pi or connected to the shop's email account.
+This edition implements the requested layout, without replacing your family homepage:
 
-
-## NEW: Render Free preview, individual accounts and change history
-
-This update adds account roles, forced first-login password changes, and an application activity history. It can initialize an administrator through Render Environment settings; no Render Shell is required.
-
-### Replace the files in GitHub
-
-Extract this ZIP. In your GitHub repository, upload the contents of the included `suncity-optics` folder at the same level as your existing `app.py`, preserving `public/`, `deploy/` and `tests/` paths. Replace existing files and commit. Do not upload the ZIP as a source file. This updates your original package; it is not a separate application.
-
-### Render Free setup
-
-Use a **Web Service**, Language **Docker**, and the **Free** compute plan. Do not add a disk; disks require paid hosting. Set these variables in the service's **Environment** page:
-
-| Key | Value |
+| File or folder | Purpose |
 | --- | --- |
-| `ADMIN_USERNAME` | `tempadmin` |
-| `ADMIN_PASSWORD` | A private temporary password you choose, 12–128 characters |
-| `IS_FREE_PREVIEW` | `1` |
-| `SUNCITY_DATA` | `/data` |
-| `PORT` | `8090` |
+| `/var/www/html/index.html` | Your existing family homepage; installer does not modify it |
+| `/var/www/html/suncityoptics.html` | Shortcut that opens the optical shop on port 8081 |
+| `/var/www/html/suncityoptics/index.html` | Optical shop homepage |
+| `/var/www/html/suncityoptics/admin.html` | Staff studio interface |
+| `/var/www/html/suncityoptics/app.py`, `docx_import.py` | Python backend and Word importer |
+| `/var/www/html/suncityoptics/style.css`, `site.js`, `admin.js`, `eyewear.svg` | Site assets |
+| `/var/www/html/suncityoptics/data/` | Database and imported Word images |
+| `/var/www/html/suncityoptics/site.env` | Private environment and email configuration |
+| `/var/www/html/suncityoptics/deploy/` | Apache/systemd configuration templates |
 
-No temporary password is included in this ZIP. Enter it directly in Render, not in GitHub files, screenshots or chat. Keep these bootstrap variables while testing so a fresh database can recreate your initial login.
+All application code, assets, records, imported images and private settings are under `suncityoptics`. Apache and systemd also need their normal configuration entries under `/etc`; the installer copies the included templates there.
 
-Remove an old or example `PUBLIC_ORIGIN` value to let this version use Render's automatic `RENDER_EXTERNAL_URL`. If you use a custom domain, set `PUBLIC_ORIGIN` to that exact HTTPS origin with no path or trailing slash. Then choose **Save, rebuild, and deploy** and wait until the new version is live. (If GitHub auto-deploy already ran, saving and deploying the current build is sufficient.)
+## How the address works
 
-Open the site → **Staff admin** at the bottom → sign in as `tempadmin` with your chosen temporary password. The first screen requires changing it. After saving, sign in again with the new password.
+On your home network, visit your existing site's shortcut:
 
-The environment credentials only create an account when the accounts table is empty. They do not overwrite an existing account or change a saved password. Changing `ADMIN_PASSWORD` is not a password reset for an existing database. On the free plan, a reset of local storage recreates the initial environment login, with another mandatory password change. A normal in-app password change does not modify the Render environment value.
+`https://192.168.0.120/suncityoptics.html`
 
-### Create individual employee logins
+It redirects the browser to:
 
-As an admin, open **Login accounts**. Enter the person's name, a unique username (letters, numbers, `.`, `_`, `@` or `-`), their access role and a temporary password of at least 12 characters. Share credentials privately. Each new or reset account must change its password before accessing shop data.
+`http://192.168.0.120:8081/suncityoptics/index.html`
 
-| Role | Access |
-| --- | --- |
-| Admin | Shop features, notification recipients, user account management and activity history |
-| Staff | Website editing, Word publishing, bookings, employee profiles and messages; can change their own password |
+The shortcut uses the hostname you visited, so changing the Pi's IP does not require editing its JavaScript. Its no-JavaScript fallback uses the original `192.168.0.120` address. This is an HTTP port 8081 setup for your home network. To publish the site online, configure a dedicated HTTPS domain/reverse proxy and update `PUBLIC_ORIGIN`. Do not publish this HTTP test shortcut as a final public login flow.
 
-Employee public profiles and sign-in accounts are separate. An account's display name identifies the person, while the audit history records their unique username. Give each person their own account. You can edit roles, disable accounts, or reset another account's temporary password. There is no account deletion button, preserving attribution in history. Permission changes and password resets revoke that account's sessions. Your own password can only be changed with your current password. The app prevents disabling/demoting your own admin account or removing the last enabled administrator.
+Admin: `http://192.168.0.120:8081/suncityoptics/admin`.
 
-You may create a personal admin account, sign in with it and then disable `tempadmin`. On a free-plan storage reset, the environment account will be recreated because all saved accounts will have disappeared.
+The optical site remains independent of the family site and Yowie. Its service runs on loopback port 8090, with Apache forwarding port 8081 to it. The physical files stay in your requested folder. Python processes the booking forms and logins; opening `index.html` as a local file or serving it as plain static HTML does not run the backend.
 
-### Review who changed what
+## Install using WinSCP and PuTTY
 
-Open **Change history** as an admin. It shows the newest 500 entries and supports filtering by account, action or details. Logged actions include sign-in/out, password changes (never the password), account changes, website setting edits, Word imports/publication, employee record changes, booking status/assignment updates, message read status, alert retries and CSV exports. Public website settings include shortened before/after values. Employee email/phone edits record that the field changed, without copying contact values into the log. Word imports record the action and document size, not a full copy of the document. Raw database access is outside this application log; the log is not independently tamper-proof.
-
-### Free-plan limitations
-
-Render Free loses local database contents and images on restarts, redeployments and idle spin-down. This includes accounts, new passwords, bookings, messages, employee records, Word pages and change history. It is a demonstration, not durable storage for real customers. The preview banner reminds admins of this. Original code and artwork remain in GitHub.
-
-Render Free also blocks SMTP ports 25, 465 and 587. The SMTP alerts supplied with this package cannot deliver on this plan. The dashboard and message inbox still work while the instance is running. An HTTPS email-provider integration and external database/image storage would require additional development; this update does not add those services. For durable operation, use paid hosting with a persistent disk or your Pi, and configure email delivery plus the mail worker.
-
-Official references checked 6 November 2026: https://render.com/docs/free, https://render.com/docs/configure-environment-variables, https://render.com/docs/environment-variables.
-
-## What is included
-
-- A public homepage with six editable services, opening hours, contact information, directions, Facebook and Setmore links, and optional public team introductions.
-- A footer-only **Staff admin** link. Real server-side login protects private records; the position of the link is not the security mechanism.
-- Admin username/password set during installation, with no shared default password. Password changes and server-side password resets are supported.
-- Website editing: headlines, story, contact details, image URL, accent colour, services and hours.
-- **Microsoft Word import**: upload `.docx` → preview draft → publish as main content. Switch back to the built-in homepage at any time.
-- Booking **requests**, status tracking, employee assignment, searching, filtering and CSV export. Shop staff must contact customers and confirm availability. Requests may overlap; this is not a real-time availability calendar.
-- Employee records: name, role, email, phone, introduction and optional public visibility. Contact details stay private. Employee profiles are separate from the individual sign-in accounts managed under Login accounts.
-- A chatbox fixed in the **bottom-right**, with current shop information and a message form. Staff messages appear in the admin inbox. The FAQ helper is not AI or live chat; staff reply by email.
-- Up to **three notification email addresses**, configurable in admin. SMTP sends short alerts with a dashboard link, without customer details. Sending credentials remain on the server. The Pi installer runs the mail worker every minute.
-
-## First install on your Raspberry Pi
-
-This creates a dedicated application at `/opt/suncity-optics`, stores its records at `/var/lib/suncity-optics`, and leaves your existing family and Yowie Apache configurations alone. Do not place the backend or database in `/var/www/html`.
-
-1. Copy this extracted `suncity-optics` folder to your Pi, such as `/home/mervin/suncity-optics`.
-2. Open a terminal:
+1. Download the updated ZIP onto Windows. Keep the ZIP intact for transfer.
+2. In WinSCP, use SFTP, your Pi IP, port 22 and your Pi credentials. Upload the ZIP to your Pi user's home directory, **not directly into the public web root**. The installer protects the destination before copying private files into it.
+3. In PuTTY, connect using SSH to your Pi, then run:
 
 ```bash
-cd /home/mervin/suncity-optics
+cd ~
+sudo apt-get install -y unzip
+unzip -o Sun_City_Optics_Website.zip -d suncity-root-setup
+cd ~/suncity-root-setup/suncityoptics
 sudo bash install-pi.sh
 ```
 
-3. Enter the full public origin you plan to use, such as `https://optics.example.com`. You can instead start with a LAN URL, such as `http://192.168.0.120:8081`, if configuring the LAN test below. The origin must match the browser address exactly, including scheme and port. Do not include `/index.html` or a subdirectory. This app expects its own domain or port, at the URL root.
-4. Choose the admin username and a password of at least 12 characters. Store them privately. The installer will not overwrite an existing `/opt/suncity-optics` installation.
-5. Connect Apache using one of the following routes. The Python service listens only on `127.0.0.1:8090`, so visitors reach it through Apache or another reverse proxy.
+4. At the origin prompt, press Enter for `http://192.168.0.120:8081` or enter your actual Pi address with port 8081. Enter an origin only, not `/suncityoptics` or a filename.
+5. Choose your admin username and a password of at least 12 characters. Password typing is hidden. This creates a permanent local account; no shared temporary password is included.
+6. The installer configures the optical shop's separate Apache port and starts the web service and email timer. It does not replace your family `index.html` or change your existing virtual-host files.
+7. Open the shortcut or direct shop URL above.
 
-### Option A — test on your home network using a separate port
+The installer stops if an earlier optical installation, destination folder, configuration or occupied port is found. Do not delete those files or your database. Share the message so the existing installation can be migrated while preserving records. The included installer is for a fresh installation, not an automatic migration or update.
 
-Keep your existing ports 80, 443 and 8443. Check that 8081 is available before choosing it. Use another free port if needed and update the origin accordingly.
+## Why the directory is protected
 
-```bash
-sudo a2enmod proxy proxy_http
-sudo nano /etc/apache2/sites-available/suncity-lan.conf
-```
+This folder holds Python source, credentials and customer records. The installer adds a global Apache `Directory` rule denying direct filesystem access to `/var/www/html/suncityoptics`, and adds `.htaccess` as a secondary safeguard. It enables the protection before copying private files.
 
-Paste:
+On your normal family-site port, `/suncityoptics/app.py`, `/suncityoptics/site.env`, and all other files in that folder should return **403 Forbidden**. The optical site on port 8081 is served through the Python app, which explicitly serves only approved pages and image assets. Its source, environment and database paths return **404**. The root `suncityoptics.html` shortcut remains accessible on your family site. Do not remove these protections to make static folder URLs work on port 443; use the port 8081 shortcut.
 
-```apache
-Listen 8081
-<VirtualHost *:8081>
-    ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:8090/
-    ProxyPassReverse / http://127.0.0.1:8090/
-    LimitRequestBody 10485760
-</VirtualHost>
-```
+After installation, check in your browser:
 
-Then:
+- `https://192.168.0.120/index.html` — your existing homepage.
+- `https://192.168.0.120/suncityoptics.html` — opens the optical site on 8081.
+- `https://192.168.0.120/suncityoptics/site.env` — 403; must never display credentials.
+- `http://192.168.0.120:8081/suncityoptics/app.py` — 404.
 
-```bash
-sudo a2ensite suncity-lan.conf
-sudo apache2ctl configtest
-sudo systemctl reload apache2
-```
+Exact behavior on your Pi must be verified after installing, because your existing Apache configuration is not available in this package's test environment.
 
-Open `http://192.168.0.120:8081/`, replacing the IP if your Pi uses another address. The Staff admin link is at the bottom. LAN HTTP is for initial private testing. Use HTTPS for a public site and admin login.
+## Staff accounts and change history
 
-### Option B — public domain on your Pi
+Sign in through Staff admin. Admins can create individual sign-ins under **Login accounts**, assign Admin or Staff roles, disable accounts and reset temporary passwords. Each new or reset account must choose its own password before using the studio. Employee public profiles and sign-in accounts are separate records. Staff can edit the shop, bookings, Word pages, profiles and messages. Only admins can manage accounts, change notification recipients or view the change history.
 
-Use a dedicated domain/subdomain. `deploy/apache-vhost.conf` is an example for a separate Apache virtual host; replace its example domain. Configure DNS and an HTTPS certificate using your hosting/network provider. The home connection must be reachable, or use an HTTPS tunnel to Apache/the local service. A tunnel can avoid router port forwarding, but the Pi still needs power, internet and uptime. Follow the tunnel provider's current setup instructions. DNS alone does not make a private `192.168...` address reachable online.
+The **Change history** tab records the responsible username for website setting edits, booking status and assignment changes, employee updates, Word imports/publication, account changes and other tracked actions. Passwords are not logged. It displays the newest 500 entries, with a text filter. Logs are stored locally with the database; they are not an independent tamper-proof audit service.
 
-Enable the proxy modules with `sudo a2enmod proxy proxy_http`. Add your separate site configuration, test with `sudo apache2ctl configtest`, and reload Apache. Preserve existing sites.
+## Microsoft Word homepage
 
-When your public HTTPS address is ready, edit:
+Import a `.docx` file in **Word page import**, preview it, then publish it. Paragraphs, headings, basic formatting, simple tables, hyperlinks and embedded PNG/JPEG/GIF/WebP images are supported. Use pictures **In Line with Text**. Complex Word shapes, positioning, columns, fonts and pagination may differ or be omitted. Use `#booking` as a Word hyperlink to jump to the retained booking section. The website header, visit details, booking form, footer and bottom-right chatbox remain available with a published Word page.
 
-```bash
-sudo nano /etc/suncity-optics.env
-```
+## Bookings, messages and Setmore
 
-Set `PUBLIC_ORIGIN=https://your-exact-domain` (without a trailing slash), then:
+Website bookings are requests requiring staff confirmation, not guaranteed available slots. Staff can change status, assign an employee and export CSV. The chatbox gives quick answers and accepts messages for staff; it is not live chat or AI. Staff reply through their email app.
+
+The supplied Setmore link remains available. Existing Setmore appointments are not automatically imported or synchronized into this dashboard. The business details originally came from the shop's Setmore page; review them before launch. No employee names, reviews or customer counts were invented.
+
+## Configure email alerts on your Pi
+
+In Admin → Email & security, save up to three recipient addresses. Edit the server-side SMTP settings:
 
 ```bash
-sudo systemctl restart suncity-optics
+sudo nano /var/www/html/suncityoptics/site.env
 ```
 
-The app sets Secure admin cookies when the origin uses HTTPS. Configure your proxy/tunnel to serve the complete site on that single origin; cross-origin frontend/backend separation is not included.
-
-## Set up the three email alerts
-
-In Staff admin → Email & security, enter up to three recipient addresses and save. Separately, use your email provider's SMTP settings in `/etc/suncity-optics.env`:
+Fill in the values from the shop's email provider:
 
 ```ini
 SMTP_HOST=smtp.your-provider.example
 SMTP_PORT=587
 SMTP_FROM=bookings@your-domain.example
 SMTP_USER=bookings@your-domain.example
-SMTP_PASSWORD=your-provider-app-password
+SMTP_PASSWORD=your-private-app-password
 ```
 
-Port 587 uses STARTTLS; port 465 uses TLS from the start. An email app password or SMTP credentials may be required by your provider. Do not put real credentials in GitHub or public HTML. The `.env` file is readable only by root and the service group.
+Use provider-specific SMTP credentials, not the website admin password. Port 587 uses STARTTLS; 465 uses TLS from connection. Save, then run:
 
 ```bash
 sudo systemctl restart suncity-optics
@@ -155,68 +110,18 @@ sudo systemctl start suncity-mail.service
 sudo systemctl status suncity-mail.timer
 ```
 
-Submit a test request after configuring recipients and SMTP. Check all three inboxes, junk folders, the dashboard's queued/error counts and `sudo journalctl -u suncity-mail.service`. The test suite uses a simulated SMTP server; actual email delivery must be tested with your account. Failed alerts retry up to ten runs. Use **Retry failed alerts** after correcting settings. Delivery is not a confirmed customer appointment; the shop contacts customers separately. Requests made before adding recipient addresses do not retroactively create alerts.
+The installer runs the mail queue every minute. Configure recipients before submitting a test request and check all inboxes/junk folders. Email delivery has to be verified using your real provider. Alerts contain a dashboard link and reference, without customer details. Changes to booking status do not automatically email customers. Failed delivery retries up to ten times; retry failed alerts from admin after correcting settings.
 
-## Design a homepage in Microsoft Word
+## Editing, backups and password recovery
 
-1. Create a normal **Word document (.docx)**. Legacy `.doc`, PDF and macro-enabled `.docm` files are not supported.
-2. Use Heading 1/2/3 for headings and normal paragraphs for text. Add bold, italic, underline and text colours if desired.
-3. Insert photos using **Insert → Pictures** and choose **In Line with Text**. Use embedded PNG, JPEG, GIF or WebP files. Linked/cloud-only pictures and SVG/EMF/WMF/HEIC images are not imported; convert those images first.
-4. Add links using **Insert → Link** or Ctrl+K. Supported link types are HTTP/HTTPS, `mailto:`, `tel:` and same-page anchors. Use `#booking` to jump to the site's appointment form. A link's destination must already exist; uploading a Word document does not create other webpages.
-5. Use simple tables for structured content. Documents reflow for smaller screens. Exact Word pagination, font families/sizes, columns, shapes, text boxes, floating positioning, headers and footers are not preserved. Keep important copy in ordinary document paragraphs.
-6. Sign in → Word page import → select your document (under 10 MB) → **Import as draft**.
-7. Review the preview, then **Publish Word homepage**. The website header, booking form, visit details, chatbox and footer remain outside the imported content.
-8. To revert, choose **Use built-in homepage**. Your latest Word draft stays available. The importer keeps embedded image files; originals and older image assets are not automatically garbage-collected. Back up the data directory and retain your original Word documents separately.
+Use admin for content, staff and Word changes. You can locate all code and data in the one requested folder using WinSCP. Protected system-owned files may require `sudo` through PuTTY; do not make credentials or the database world-writable to enable editing.
 
-The importer constructs a restricted set of HTML from document text. Source HTML, macros, JavaScript links, embedded objects and external image relationships are not executed or imported.
+Back up the complete `data` folder and `site.env` privately before updates. Stop the web service and email timer and wait for any active mail run to finish before a filesystem backup. Never place a backup ZIP containing credentials or customer records in `/var/www/html` outside the protected directory.
 
-## Existing Setmore appointments
-
-The verified business details were sourced from `https://suncityoptics.setmore.com/` on 6 November 2026. Please review the shop's details before launch. Facebook is linked as supplied; its page content could not be reliably extracted. No employee names, reviews, customer counts or brand partnerships were invented.
-
-The homepage links to the existing Setmore booking page. Admin contains a shortcut to Setmore. **There is no Setmore API synchronization in this package.** Appointments made on Setmore remain in Setmore and follow its notification settings. To display those appointments in this dashboard automatically, a separate authorized Setmore integration is needed. The website's own request form and message form feed this dashboard and its three alert addresses.
-
-## Can this launch through GitHub?
-
-**GitHub can store the source and connect it to hosting. GitHub Pages alone cannot run this application.** Pages serves static files and cannot execute the Python backend, save SQLite records, process Word files or send these server-side email alerts.
-
-For the complete site, push the source to a GitHub repository, then deploy it to either:
-
-- Your Raspberry Pi using this installer and Apache/HTTPS.
-- A Linux server or Python/container-capable web host with HTTPS and persistent disk storage, using the Dockerfile or Gunicorn.
-
-Do not include the `data/` folder, real environment files, database files, customer information or passwords in GitHub. The included `.gitignore` excludes them. GitHub Actions deployment is not configured because the repository and hosting account have not been chosen.
-
-### Example container deployment on a Linux host
-
-Build from the project folder:
+Reset the admin accounts only if needed (this replaces all sign-in accounts, while retaining shop data and logs):
 
 ```bash
-docker build -t suncity-optics .
-docker volume create suncity-data
-docker run --rm -it -v suncity-data:/data suncity-optics python3 app.py setup
-```
-
-Create a private environment file on the host containing your real `PUBLIC_ORIGIN`, `SMTP_*` values and `SUNCITY_DATA=/data`, then launch:
-
-```bash
-docker run -d --name suncity-web --restart unless-stopped --env-file /secure/path/suncity.env -p 127.0.0.1:8090:8090 -v suncity-data:/data suncity-optics
-```
-
-Configure a reverse proxy with HTTPS to port 8090. The same persistent volume must survive rebuilds/redeployments. If your provider does not run Docker with persistent disks, use a VM or a compatible Python service instead. A static-only host will not work. To deliver email, schedule the command `python3 app.py mail` once a minute using the same environment and data volume, for example with a host scheduler running:
-
-```bash
-docker exec suncity-web python3 app.py mail
-```
-
-The container starts only the web process; the mail schedule is essential. The Docker recipe and Raspberry Pi installer are provided but were not executed against your machine or a hosting account.
-
-## Password reset, logs and updates
-
-Reset the admin account (replaces the username/password and signs out all sessions):
-
-```bash
-sudo -u www-data env SUNCITY_DATA=/var/lib/suncity-optics python3 /opt/suncity-optics/app.py setup
+sudo -u www-data env SUNCITY_DATA=/var/www/html/suncityoptics/data python3 /var/www/html/suncityoptics/app.py setup
 ```
 
 Logs:
@@ -226,23 +131,14 @@ sudo journalctl -u suncity-optics -n 50
 sudo journalctl -u suncity-mail.service -n 50
 ```
 
-Before an update, stop the web service and timer, wait for any running mail service to finish, then back up `/var/lib/suncity-optics` and the private environment file to a protected location. This directory includes the database and imported images; both are needed for a full restore. Keep customer records out of public shares.
+## Testing and portability
 
-For a code update, replace only `/opt/suncity-optics/app.py`, `docx_import.py` and `public/` with the new version. Keep `/var/lib/suncity-optics` and `/etc/suncity-optics.env`. Then restart `suncity-optics` and `suncity-mail.timer`. Follow any future version's migration instructions before replacing code. This package uses schema version 2. On first startup it adds the user-role fields and activity table automatically and invalidates legacy sessions. Existing accounts become admins and keep their saved passwords.
-
-## Local development & validation
-
-Python 3.9 or newer with system timezone data is required. No third-party Python packages are needed for the application itself. Production runs under Gunicorn.
-
-```bash
-python3 app.py setup
-python3 app.py
-```
-
-Open `http://localhost:8090/`. The built-in server is a development option, not the public hosting process. For another browser address, set `PUBLIC_ORIGIN` to that exact origin. Run the test suite:
+Application tests run with Python 3.9+ and system timezone data:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Ten integration tests cover named accounts, bootstrap initialization, forced password changes, roles, disabled/reset accounts, audit attribution, migration of the original schema, and login, CSRF/origin checks, private-record access, booking submission/validation and assignments, the inbox, password changes, DOCX draft/publish/restore and clickable links/images, submission limits, CSV export, and simulated mail success/failure. JavaScript syntax was checked with Node. Browser-based visual verification was unavailable in the build environment; responsive layouts still need a check on your phone after installation. Real SMTP delivery, Apache, systemd, Docker and public DNS/HTTPS require deployment verification.
+The suite covers authentication, roles, account bootstrap, migration of original accounts, bookings, messages, Word links/images, mail simulation and the requested nested routes. JavaScript syntax and installer embedded Python are checked separately. Browser visual QA and execution against your Pi's Apache/systemd/SMTP were not available here.
+
+The included Dockerfile remains a portable option for a Python/container-capable host. It expects `/data` for persistent records. On Render Free, local records are disposable and normal SMTP ports are blocked; use only sample data. For Pi hosting, no Render settings are required. The SQLite schema is version 2 and retains the account migration from the earlier package.

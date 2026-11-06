@@ -74,7 +74,7 @@ def process_mail():
             c.execute('UPDATE outbox SET lease=?,attempts=attempts+1 WHERE id=?',(time.time()+600,row['id']))
         try:
             msg=EmailMessage();msg['From']=sender;msg['To']=row['recipient'];msg['Subject']='Sun City Optics — new '+row['kind']
-            msg.set_content('A new '+row['kind']+' is waiting in your secure admin dashboard.\n\n'+ORIGIN+'/admin\n\nReference: '+str(row['record_id'])+'\nCustomer details are available after signing in.')
+            msg.set_content('A new '+row['kind']+' is waiting in your secure admin dashboard.\n\n'+ORIGIN+'/suncityoptics/admin\n\nReference: '+str(row['record_id'])+'\nCustomer details are available after signing in.')
             port=int(os.environ.get('SMTP_PORT','587'))
             if port==465: server=smtplib.SMTP_SSL(host,port,timeout=15,context=ssl.create_default_context())
             else:
@@ -90,7 +90,10 @@ def application(env,start):
     headers=[('X-Content-Type-Options','nosniff'),('Referrer-Policy','strict-origin-when-cross-origin'),('X-Frame-Options','SAMEORIGIN'),('Content-Security-Policy',"default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"),('Cache-Control','no-store')]
     def respond(data,status=200,mime='application/json; charset=utf-8'):
         b=data if isinstance(data,bytes) else json.dumps(data).encode();start(str(status)+' '+{200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',409:'Conflict',413:'Payload Too Large',429:'Too Many Requests',500:'Server Error'}.get(status,'Error'),headers+[('Content-Type',mime),('Content-Length',str(len(b)))]);return [b]
-    path=env.get('PATH_INFO','/');method=env.get('REQUEST_METHOD','GET');session=None
+    path=env.get('PATH_INFO','/')
+    if path=='/suncityoptics' or path.startswith('/suncityoptics/'):
+        path=path[len('/suncityoptics'):] or '/'
+    method=env.get('REQUEST_METHOD','GET');session=None
     try:
         cookie=SimpleCookie();cookie.load(env.get('HTTP_COOKIE',''));token=cookie['sc_session'].value if 'sc_session' in cookie else ''
         with db() as c:
@@ -227,7 +230,7 @@ def application(env,start):
             except Exception:raise ValueError('This document could not be imported. Use a valid .docx file with embedded PNG/JPEG/GIF/WebP images.')
             save_settings(s,session['username'],'Imported Word draft',{'characters':len(s['doc_draft'])});return respond({'ok':True})
         if path=='/api/admin/word-preview':
-            return respond(('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><article class="word-page">'+settings()['doc_draft']+'</article>').encode(),mime='text/html; charset=utf-8')
+            return respond(('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/suncityoptics/style.css"><article class="word-page">'+settings()['doc_draft']+'</article>').encode(),mime='text/html; charset=utf-8')
         if path=='/api/admin/publish' and method=='POST':
             s=settings();mode=body.get('mode')
             if mode not in ('word','designed'):raise ValueError('Invalid page mode.')
@@ -281,9 +284,9 @@ def application(env,start):
             if not re.fullmatch(r'[a-f0-9]{64}\.(png|jpg|gif|webp)',name):return respond({'error':'Not found.'},404)
             file=MEDIA/name
         else:
-            names={'/':'index.html','/admin':'admin.html','/admin/':'admin.html','/style.css':'style.css','/site.js':'site.js','/admin.js':'admin.js','/eyewear.svg':'eyewear.svg'}
+            names={'/':'index.html','/index.html':'index.html','/admin':'admin.html','/admin/':'admin.html','/style.css':'style.css','/site.js':'site.js','/admin.js':'admin.js','/eyewear.svg':'eyewear.svg'}
             if path not in names:return respond({'error':'Not found.'},404)
-            file=BASE/'public'/names[path]
+            file=BASE/names[path]
         if not file.is_file():return respond({'error':'Not found.'},404)
         return respond(file.read_bytes(),mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
     except (ValueError,KeyError,TypeError,OverflowError) as e:return respond({'error':str(e) if isinstance(e,ValueError) else 'Invalid request data.'},400)
