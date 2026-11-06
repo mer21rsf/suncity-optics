@@ -1,0 +1,17 @@
+[Unit]
+Description=Deliver queued Sun City Optics email alerts
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/suncity-optics
+EnvironmentFile=/etc/suncity-optics.env
+ExecStart=/usr/bin/python3 /opt/suncity-optics/app.py mail
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/suncity-optics

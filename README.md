@@ -2,6 +2,60 @@
 
 A responsive ivory / forest-green website for the Surrey optical shop, prepared by Mervin's request. Includes a complete Python + SQLite backend, without Node.js or PHP. Compatible with Raspberry Pi OS Bookworm, including 32-bit userspace. This package has not been installed on your Pi or connected to the shop's email account.
 
+
+## NEW: Render Free preview, individual accounts and change history
+
+This update adds account roles, forced first-login password changes, and an application activity history. It can initialize an administrator through Render Environment settings; no Render Shell is required.
+
+### Replace the files in GitHub
+
+Extract this ZIP. In your GitHub repository, upload the contents of the included `suncity-optics` folder at the same level as your existing `app.py`, preserving `public/`, `deploy/` and `tests/` paths. Replace existing files and commit. Do not upload the ZIP as a source file. This updates your original package; it is not a separate application.
+
+### Render Free setup
+
+Use a **Web Service**, Language **Docker**, and the **Free** compute plan. Do not add a disk; disks require paid hosting. Set these variables in the service's **Environment** page:
+
+| Key | Value |
+| --- | --- |
+| `ADMIN_USERNAME` | `tempadmin` |
+| `ADMIN_PASSWORD` | A private temporary password you choose, 12–128 characters |
+| `IS_FREE_PREVIEW` | `1` |
+| `SUNCITY_DATA` | `/data` |
+| `PORT` | `8090` |
+
+No temporary password is included in this ZIP. Enter it directly in Render, not in GitHub files, screenshots or chat. Keep these bootstrap variables while testing so a fresh database can recreate your initial login.
+
+Remove an old or example `PUBLIC_ORIGIN` value to let this version use Render's automatic `RENDER_EXTERNAL_URL`. If you use a custom domain, set `PUBLIC_ORIGIN` to that exact HTTPS origin with no path or trailing slash. Then choose **Save, rebuild, and deploy** and wait until the new version is live. (If GitHub auto-deploy already ran, saving and deploying the current build is sufficient.)
+
+Open the site → **Staff admin** at the bottom → sign in as `tempadmin` with your chosen temporary password. The first screen requires changing it. After saving, sign in again with the new password.
+
+The environment credentials only create an account when the accounts table is empty. They do not overwrite an existing account or change a saved password. Changing `ADMIN_PASSWORD` is not a password reset for an existing database. On the free plan, a reset of local storage recreates the initial environment login, with another mandatory password change. A normal in-app password change does not modify the Render environment value.
+
+### Create individual employee logins
+
+As an admin, open **Login accounts**. Enter the person's name, a unique username (letters, numbers, `.`, `_`, `@` or `-`), their access role and a temporary password of at least 12 characters. Share credentials privately. Each new or reset account must change its password before accessing shop data.
+
+| Role | Access |
+| --- | --- |
+| Admin | Shop features, notification recipients, user account management and activity history |
+| Staff | Website editing, Word publishing, bookings, employee profiles and messages; can change their own password |
+
+Employee public profiles and sign-in accounts are separate. An account's display name identifies the person, while the audit history records their unique username. Give each person their own account. You can edit roles, disable accounts, or reset another account's temporary password. There is no account deletion button, preserving attribution in history. Permission changes and password resets revoke that account's sessions. Your own password can only be changed with your current password. The app prevents disabling/demoting your own admin account or removing the last enabled administrator.
+
+You may create a personal admin account, sign in with it and then disable `tempadmin`. On a free-plan storage reset, the environment account will be recreated because all saved accounts will have disappeared.
+
+### Review who changed what
+
+Open **Change history** as an admin. It shows the newest 500 entries and supports filtering by account, action or details. Logged actions include sign-in/out, password changes (never the password), account changes, website setting edits, Word imports/publication, employee record changes, booking status/assignment updates, message read status, alert retries and CSV exports. Public website settings include shortened before/after values. Employee email/phone edits record that the field changed, without copying contact values into the log. Word imports record the action and document size, not a full copy of the document. Raw database access is outside this application log; the log is not independently tamper-proof.
+
+### Free-plan limitations
+
+Render Free loses local database contents and images on restarts, redeployments and idle spin-down. This includes accounts, new passwords, bookings, messages, employee records, Word pages and change history. It is a demonstration, not durable storage for real customers. The preview banner reminds admins of this. Original code and artwork remain in GitHub.
+
+Render Free also blocks SMTP ports 25, 465 and 587. The SMTP alerts supplied with this package cannot deliver on this plan. The dashboard and message inbox still work while the instance is running. An HTTPS email-provider integration and external database/image storage would require additional development; this update does not add those services. For durable operation, use paid hosting with a persistent disk or your Pi, and configure email delivery plus the mail worker.
+
+Official references checked 6 November 2026: https://render.com/docs/free, https://render.com/docs/configure-environment-variables, https://render.com/docs/environment-variables.
+
 ## What is included
 
 - A public homepage with six editable services, opening hours, contact information, directions, Facebook and Setmore links, and optional public team introductions.
@@ -10,7 +64,7 @@ A responsive ivory / forest-green website for the Surrey optical shop, prepared 
 - Website editing: headlines, story, contact details, image URL, accent colour, services and hours.
 - **Microsoft Word import**: upload `.docx` → preview draft → publish as main content. Switch back to the built-in homepage at any time.
 - Booking **requests**, status tracking, employee assignment, searching, filtering and CSV export. Shop staff must contact customers and confirm availability. Requests may overlap; this is not a real-time availability calendar.
-- Employee records: name, role, email, phone, introduction and optional public visibility. Contact details stay private. Employees are records, not separate login accounts.
+- Employee records: name, role, email, phone, introduction and optional public visibility. Contact details stay private. Employee profiles are separate from the individual sign-in accounts managed under Login accounts.
 - A chatbox fixed in the **bottom-right**, with current shop information and a message form. Staff messages appear in the admin inbox. The FAQ helper is not AI or live chat; staff reply by email.
 - Up to **three notification email addresses**, configurable in admin. SMTP sends short alerts with a dashboard link, without customer details. Sending credentials remain on the server. The Pi installer runs the mail worker every minute.
 
@@ -174,7 +228,7 @@ sudo journalctl -u suncity-mail.service -n 50
 
 Before an update, stop the web service and timer, wait for any running mail service to finish, then back up `/var/lib/suncity-optics` and the private environment file to a protected location. This directory includes the database and imported images; both are needed for a full restore. Keep customer records out of public shares.
 
-For a code update, replace only `/opt/suncity-optics/app.py`, `docx_import.py` and `public/` with the new version. Keep `/var/lib/suncity-optics` and `/etc/suncity-optics.env`. Then restart `suncity-optics` and `suncity-mail.timer`. Follow any future version's migration instructions before replacing code. This initial package uses schema version 1.
+For a code update, replace only `/opt/suncity-optics/app.py`, `docx_import.py` and `public/` with the new version. Keep `/var/lib/suncity-optics` and `/etc/suncity-optics.env`. Then restart `suncity-optics` and `suncity-mail.timer`. Follow any future version's migration instructions before replacing code. This package uses schema version 2. On first startup it adds the user-role fields and activity table automatically and invalidates legacy sessions. Existing accounts become admins and keep their saved passwords.
 
 ## Local development & validation
 
@@ -191,4 +245,4 @@ Open `http://localhost:8090/`. The built-in server is a development option, not 
 python3 -m unittest discover -s tests -v
 ```
 
-Six integration tests cover login, CSRF/origin checks, private-record access, booking submission/validation and assignments, the inbox, password changes, DOCX draft/publish/restore and clickable links/images, submission limits, CSV export, and simulated mail success/failure. JavaScript syntax was checked with Node. Browser-based visual verification was unavailable in the build environment; responsive layouts still need a check on your phone after installation. Real SMTP delivery, Apache, systemd, Docker and public DNS/HTTPS require deployment verification.
+Ten integration tests cover named accounts, bootstrap initialization, forced password changes, roles, disabled/reset accounts, audit attribution, migration of the original schema, and login, CSRF/origin checks, private-record access, booking submission/validation and assignments, the inbox, password changes, DOCX draft/publish/restore and clickable links/images, submission limits, CSV export, and simulated mail success/failure. JavaScript syntax was checked with Node. Browser-based visual verification was unavailable in the build environment; responsive layouts still need a check on your phone after installation. Real SMTP delivery, Apache, systemd, Docker and public DNS/HTTPS require deployment verification.

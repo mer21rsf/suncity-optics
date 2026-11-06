@@ -8,7 +8,7 @@ from docx_import import convert, safe_url
 BASE=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('SUNCITY_DATA',str(BASE/'data'))); DATA.mkdir(parents=True,exist_ok=True,mode=0o700)
 MEDIA=DATA/'media'; MEDIA.mkdir(exist_ok=True)
-ORIGIN=os.environ.get('PUBLIC_ORIGIN','http://localhost:8090').rstrip('/')
+ORIGIN=(os.environ.get('PUBLIC_ORIGIN') or os.environ.get('RENDER_EXTERNAL_URL') or 'http://localhost:8090').rstrip('/')
 TZ=ZoneInfo('America/Vancouver')
 SERVICES=[{'name':n,'minutes':m,'description':d} for n,m,d in [('Eyeglasses Adjustment',30,'A better fit, a little more comfort.'),('Contact Lens Fitting',30,'Find a fit that feels right for you.'),('Safety Glasses Fitting',60,'Practical protection for your working day.'),('Sight Test',60,'Make time for your vision needs.'),('Eyewear Shopping',60,'Explore frames and find your next favourite.'),('Lens Change or Upgrade',60,'Give your everyday eyewear a fresh perspective.')]]
 DEFAULT={'name':'Sun City Optics','eyebrow':'YOUR NEIGHBOURHOOD OPTICAL · SURREY, BC','headline':'See beautifully.\nLive brightly.','intro':'Find frames that feel like you. Discover thoughtfully chosen eyewear and friendly, personal service in the heart of Newton.','about':'Your view of the world deserves a little care. We bring together a wide choice of frames and lenses, accessible prices, and a friendly team to help you find your fit.','phone':'+1 604 355 1337','email':'suncityoptics@gmail.com','address':'Unit 125, 7135 138 Street, Surrey, BC V3W 7T9','facebook':'https://www.facebook.com/suncityoptics.surrey/','setmore':'https://suncityoptics.setmore.com/','hours':['11:00–15:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','08:00–16:00'],'services':SERVICES,'recipients':['','',''],'accent':'#d27140','hero_image':'','page_mode':'designed','doc_draft':'','doc_live':''}
@@ -24,11 +24,37 @@ CREATE TABLE IF NOT EXISTS employees(id INTEGER PRIMARY KEY,name TEXT,role TEXT,
 CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,name TEXT,email TEXT,phone TEXT,service TEXT,day TEXT,time TEXT,status TEXT DEFAULT 'Requested',employee INTEGER,created TEXT);
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,name TEXT,email TEXT,message TEXT,status TEXT DEFAULT 'Unread',created TEXT);
 CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY,recipient TEXT,kind TEXT,record_id INTEGER,sent REAL,attempts INTEGER DEFAULT 0,error TEXT DEFAULT '',lease REAL DEFAULT 0);''')
+        c.execute('BEGIN IMMEDIATE')
+        for name,definition in [('role',"TEXT DEFAULT 'admin'"),('display_name',"TEXT DEFAULT ''"),('enabled','INTEGER DEFAULT 1'),('must_change','INTEGER DEFAULT 0')]:
+            if name not in {r[1] for r in c.execute('PRAGMA table_info(admins)')}:
+                c.execute('ALTER TABLE admins ADD COLUMN '+name+' '+definition)
+        if 'username' not in {r[1] for r in c.execute('PRAGMA table_info(sessions)')}:
+            c.execute('ALTER TABLE sessions ADD COLUMN username TEXT')
+            c.execute('DELETE FROM sessions')
+        c.execute('CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,created TEXT,actor TEXT,action TEXT,details TEXT)')
         c.execute('INSERT OR IGNORE INTO settings VALUES(1,?)',(json.dumps(DEFAULT),))
 init()
 def settings():
     with db() as c:return {**DEFAULT,**json.loads(c.execute('SELECT value FROM settings WHERE id=1').fetchone()[0])}
 def pw(password,salt):return hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),310000).hex()
+def audit(c,actor,action,details=None):
+    c.execute('INSERT INTO audit(created,actor,action,details) VALUES(?,?,?,?)',(datetime.now(TZ).isoformat(),actor,action,json.dumps(details or {},ensure_ascii=False)))
+def account_info(row):
+    return {k:row[k] for k in ('username','display_name','role','must_change')}
+def bootstrap_admin():
+    """Initialize an empty database using hosting secrets; never overwrite an existing account."""
+    username=os.environ.get('ADMIN_USERNAME','').strip()
+    password=os.environ.get('ADMIN_PASSWORD','')
+    if not username and not password:return
+    if not username or len(username)>80 or not 12<=len(password)<=128:
+        raise RuntimeError('Set ADMIN_USERNAME (1–80 characters) and ADMIN_PASSWORD (12–128 characters) together in the hosting environment.')
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT 1 FROM admins LIMIT 1').fetchone():
+            salt=secrets.token_hex(16)
+            c.execute('INSERT INTO admins(username,salt,hash,role,display_name,must_change) VALUES(?,?,?,?,?,1)',(username,salt,pw(password,salt),'admin',username))
+            audit(c,'system','Initial admin created',{'username':username,'source':'hosting environment'})
+bootstrap_admin()
 def clean(v,n=500):return str(v or '').strip()[:n]
 def email(v):return bool(re.fullmatch(r'[^\s@\r\n]+@[^\s@\r\n]+\.[^\s@\r\n]+',v)) and len(v)<=254
 def limit(c,key,max_count,seconds):
@@ -68,8 +94,12 @@ def application(env,start):
     try:
         cookie=SimpleCookie();cookie.load(env.get('HTTP_COOKIE',''));token=cookie['sc_session'].value if 'sc_session' in cookie else ''
         with db() as c:
-            c.execute('DELETE FROM sessions WHERE expires<?',(time.time(),));session=c.execute('SELECT * FROM sessions WHERE token=?',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
+            c.execute('DELETE FROM sessions WHERE expires<?',(time.time(),));session=c.execute('SELECT sessions.*,admins.role,admins.display_name,admins.must_change FROM sessions JOIN admins ON admins.username=sessions.username WHERE admins.enabled=1 AND token=?',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
         if path.startswith('/api/admin') and not session:return respond({'error':'Please sign in.'},401)
+        if session and session['must_change'] and path.startswith('/api/admin') and path not in ('/api/admin/session','/api/admin/password','/api/admin/logout'):
+            return respond({'error':'Change your temporary password before continuing.','code':'password_change_required'},403)
+        if path in ('/api/admin/users','/api/admin/user','/api/admin/audit','/api/admin/retry-mail') and session and session['role']!='admin':
+            return respond({'error':'An administrator account is required.'},403)
         if method not in ('GET','POST'):return respond({'error':'Unsupported request.'},400)
         if method=='POST':
             if env.get('HTTP_ORIGIN','')!=ORIGIN:return respond({'error':'Origin rejected. Configure PUBLIC_ORIGIN to match this address.'},403)
@@ -85,23 +115,52 @@ def application(env,start):
                 if not limit(c,'login:'+env.get('REMOTE_ADDR',''),10,900):return respond({'error':'Too many attempts. Try again in 15 minutes.'},429)
                 row=c.execute('SELECT * FROM admins WHERE username=?',(clean(body.get('username'),80),)).fetchone()
                 valid=hmac.compare_digest(pw(str(body.get('password','')),row['salt'] if row else '00'*16),row['hash'] if row else '0'*64)
-                if not row or not valid:return respond({'error':'Username or password is incorrect.'},401)
+                if not row or not valid or not row['enabled']:return respond({'error':'Username or password is incorrect.'},401)
                 value=secrets.token_urlsafe(32);csrf=secrets.token_urlsafe(32)
-                c.execute('INSERT INTO sessions VALUES(?,?,?)',(hashlib.sha256(value.encode()).hexdigest(),csrf,time.time()+8*3600))
+                c.execute('INSERT INTO sessions(token,csrf,expires,username) VALUES(?,?,?,?)',(hashlib.sha256(value.encode()).hexdigest(),csrf,time.time()+8*3600,row['username']))
+                audit(c,row['username'],'Signed in')
                 c.execute('DELETE FROM limits WHERE key=?',('login:'+env.get('REMOTE_ADDR',''),))
                 headers.append(('Set-Cookie','sc_session='+value+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800'+('; Secure' if ORIGIN.startswith('https://') else '')))
-            return respond({'ok':True,'csrf':csrf})
-        if path=='/api/admin/session':return respond({'csrf':session['csrf']})
+            return respond({'ok':True,'csrf':csrf,'user':account_info(row)})
+        if path=='/api/admin/session':return respond({'csrf':session['csrf'],'user':account_info(session)})
         if path=='/api/admin/logout' and method=='POST':
-            with db() as c:c.execute('DELETE FROM sessions WHERE token=?',(session['token'],))
+            with db() as c:
+                c.execute('DELETE FROM sessions WHERE token=?',(session['token'],));audit(c,session['username'],'Signed out')
             headers.append(('Set-Cookie','sc_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'));return respond({'ok':True})
         if path=='/api/admin/password' and method=='POST':
             password=str(body.get('password',''))
             if len(password)<12 or len(password)>128:raise ValueError('Use a password of 12–128 characters.')
             with db() as c:
-                row=c.execute('SELECT * FROM admins LIMIT 1').fetchone()
+                row=c.execute('SELECT * FROM admins WHERE username=?',(session['username'],)).fetchone()
                 if not hmac.compare_digest(pw(str(body.get('current','')),row['salt']),row['hash']):return respond({'error':'Current password is incorrect.'},403)
-                salt=secrets.token_hex(16);c.execute('UPDATE admins SET salt=?,hash=?',(salt,pw(password,salt)));c.execute('DELETE FROM sessions')
+                if hmac.compare_digest(pw(password,row['salt']),row['hash']):raise ValueError('Choose a new password different from the current one.')
+                salt=secrets.token_hex(16);c.execute('UPDATE admins SET salt=?,hash=?,must_change=0 WHERE username=?',(salt,pw(password,salt),session['username']));c.execute('DELETE FROM sessions WHERE username=?',(session['username'],));audit(c,session['username'],'Changed own password')
+            return respond({'ok':True})
+        if path=='/api/admin/users':
+            with db() as c:return respond({'users':[dict(r) for r in c.execute('SELECT username,display_name,role,enabled,must_change FROM admins ORDER BY username')]})
+        if path=='/api/admin/audit':
+            with db() as c:return respond({'logs':[dict(r) for r in c.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 500')]})
+        if path=='/api/admin/user' and method=='POST':
+            username=clean(body.get('username'),80);name=clean(body.get('display_name'),100);role=body.get('role','staff');enabled=int(bool(body.get('enabled',True)));password=str(body.get('password',''))
+            if not re.fullmatch(r'[A-Za-z0-9_.@-]{1,80}',username) or not name or role not in ('admin','staff'):raise ValueError('Enter a name, valid username (letters, digits, _, ., @, -), and role.')
+            if password and not 12<=len(password)<=128:raise ValueError('Temporary passwords must have 12–128 characters.')
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                existing=c.execute('SELECT * FROM admins WHERE username=?',(username,)).fetchone()
+                if not existing and not password:raise ValueError('New accounts need a temporary password.')
+                if existing and not body.get('editing'):return respond({'error':'That username already exists. Use Edit for that account.'},409)
+                if not existing and body.get('editing'):raise ValueError('That account no longer exists.')
+                if username==session['username'] and (not enabled or role!='admin' or password):raise ValueError('Keep your own admin account enabled. Change your own password in Email & security.')
+                if existing and existing['role']=='admin' and existing['enabled'] and (not enabled or role!='admin'):
+                    if c.execute("SELECT count(*) FROM admins WHERE role='admin' AND enabled=1").fetchone()[0]<=1:raise ValueError('Keep at least one enabled administrator.')
+                if existing:
+                    c.execute('UPDATE admins SET display_name=?,role=?,enabled=? WHERE username=?',(name,role,enabled,username))
+                    if password:
+                        salt=secrets.token_hex(16);c.execute('UPDATE admins SET salt=?,hash=?,must_change=1 WHERE username=?',(salt,pw(password,salt),username))
+                    if password or role!=existing['role'] or enabled!=existing['enabled']:c.execute('DELETE FROM sessions WHERE username=?',(username,))
+                    audit(c,session['username'],'Updated user account',{'username':username,'role':role,'enabled':bool(enabled),'temporary_password_reset':bool(password)})
+                else:
+                    salt=secrets.token_hex(16);c.execute('INSERT INTO admins(username,salt,hash,role,display_name,enabled,must_change) VALUES(?,?,?,?,?,?,1)',(username,salt,pw(password,salt),role,name,enabled));audit(c,session['username'],'Created user account',{'username':username,'name':name,'role':role})
             return respond({'ok':True})
         if path in ('/api/book','/api/message') and method=='POST':
             if body.get('website'):return respond({'error':'Unable to submit.'},400)
@@ -127,9 +186,10 @@ def application(env,start):
             return respond({'ok':True,'reference':rid})
         if path=='/api/admin/dashboard':
             with db() as c:
-                return respond({'settings':settings(),'employees':employees(),'bookings':[dict(r) for r in c.execute('SELECT * FROM bookings ORDER BY day DESC,time DESC')],'messages':[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY id DESC')],'mail':{'configured':bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_FROM')),'queued':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL').fetchone()[0],'failed':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL AND attempts>0').fetchone()[0]}})
+                return respond({'user':account_info(session),'preview':os.environ.get('IS_FREE_PREVIEW')=='1','settings':settings(),'employees':employees(),'bookings':[dict(r) for r in c.execute('SELECT * FROM bookings ORDER BY day DESC,time DESC')],'messages':[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY id DESC')],'mail':{'configured':bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_FROM')),'queued':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL').fetchone()[0],'failed':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL AND attempts>0').fetchone()[0]}})
         if path=='/api/admin/settings' and method=='POST':
-            s=settings()
+            if session['role']!='admin' and 'recipients' in body:return respond({'error':'Only administrators can change alert recipients.'},403)
+            s=settings();previous=json.loads(json.dumps(s))
             for k in ('name','eyebrow','headline','intro','about','phone','email','address'):s[k]=clean(body.get(k,s[k]),3000 if k=='about' else 600)
             for k in ('facebook','setmore','hero_image'):
                 v=clean(body.get(k,s[k]),2000)
@@ -159,12 +219,13 @@ def application(env,start):
                     n=clean(item.get('name'),100);mins=int(item.get('minutes',30))
                     if not n or not 5<=mins<=240:raise ValueError('Service names and durations (5–240 minutes) are required.')
                     s['services'].append({'name':n,'minutes':mins,'description':clean(item.get('description'),300)})
-            save_settings(s);return respond({'ok':True})
+            changed={k:{'before':str(previous.get(k,''))[:400],'after':str(s[k])[:400]} for k in body if k in s and previous.get(k)!=s[k]}
+            save_settings(s,session['username'],'Edited website settings',changed);return respond({'ok':True})
         if path=='/api/admin/word' and method=='POST':
             s=settings()
             try:s['doc_draft']=convert(raw,MEDIA)
             except Exception:raise ValueError('This document could not be imported. Use a valid .docx file with embedded PNG/JPEG/GIF/WebP images.')
-            save_settings(s);return respond({'ok':True})
+            save_settings(s,session['username'],'Imported Word draft',{'characters':len(s['doc_draft'])});return respond({'ok':True})
         if path=='/api/admin/word-preview':
             return respond(('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><article class="word-page">'+settings()['doc_draft']+'</article>').encode(),mime='text/html; charset=utf-8')
         if path=='/api/admin/publish' and method=='POST':
@@ -173,37 +234,46 @@ def application(env,start):
             if mode=='word':
                 if not s['doc_draft']:raise ValueError('Import a Word document first.')
                 s['doc_live']=s['doc_draft']
-            s['page_mode']=mode;save_settings(s);return respond({'ok':True})
+            s['page_mode']=mode;save_settings(s,session['username'],'Changed homepage publication',{'mode':mode});return respond({'ok':True})
         if path=='/api/admin/employee' and method=='POST':
             with db() as c:
                 rid=int(body.get('id') or 0)
+                old_profile=c.execute('SELECT * FROM employees WHERE id=?',(rid,)).fetchone() if rid else None
+                if rid and not old_profile:raise ValueError('Employee not found.')
                 if body.get('delete'):
-                    c.execute('UPDATE bookings SET employee=NULL WHERE employee=?',(rid,));c.execute('DELETE FROM employees WHERE id=?',(rid,))
+                    c.execute('UPDATE bookings SET employee=NULL WHERE employee=?',(rid,));c.execute('DELETE FROM employees WHERE id=?',(rid,));audit(c,session['username'],'Deleted employee record',{'id':rid})
                 else:
                     vals=[clean(body.get(k),n) for k,n in [('name',100),('role',100),('email',254),('phone',40),('bio',1000)]]+[int(bool(body.get('public')))]
                     if not vals[0]:raise ValueError('Employee name is required.')
                     if vals[2] and not email(vals[2]):raise ValueError('Employee email is invalid.')
                     if rid:c.execute('UPDATE employees SET name=?,role=?,email=?,phone=?,bio=?,public=? WHERE id=?',vals+[rid])
-                    else:c.execute('INSERT INTO employees(name,role,email,phone,bio,public) VALUES(?,?,?,?,?,?)',vals)
+                    else:rid=c.execute('INSERT INTO employees(name,role,email,phone,bio,public) VALUES(?,?,?,?,?,?)',vals).lastrowid
+                    changes={k:({'changed':True} if k in ('email','phone') else {'before':str(old_profile[k] if old_profile else '')[:300],'after':str(v)[:300]}) for k,v in zip(('name','role','email','phone','bio','public'),vals) if not old_profile or old_profile[k]!=v}
+                    audit(c,session['username'],'Saved employee record',{'id':rid,'name':vals[0],'changes':changes})
             return respond({'ok':True})
         if path=='/api/admin/booking' and method=='POST':
             status=body.get('status');employee=int(body.get('employee') or 0) or None
             if status not in ('Requested','Confirmed','Completed','Cancelled'):raise ValueError('Invalid status.')
             with db() as c:
                 if employee and not c.execute('SELECT id FROM employees WHERE id=?',(employee,)).fetchone():raise ValueError('Employee no longer exists.')
-                c.execute('UPDATE bookings SET status=?,employee=? WHERE id=?',(status,employee,int(body['id'])))
+                old=c.execute('SELECT status,employee FROM bookings WHERE id=?',(int(body['id']),)).fetchone()
+                if not old:raise ValueError('Booking not found.')
+                c.execute('UPDATE bookings SET status=?,employee=? WHERE id=?',(status,employee,int(body['id'])));audit(c,session['username'],'Updated booking',{'id':int(body['id']),'before':dict(old),'after':{'status':status,'employee':employee}})
             return respond({'ok':True})
         if path=='/api/admin/message' and method=='POST':
-            with db() as c:c.execute('UPDATE messages SET status=? WHERE id=?',('Read' if body.get('read') else 'Unread',int(body['id'])))
+            with db() as c:
+                c.execute('UPDATE messages SET status=? WHERE id=?',('Read' if body.get('read') else 'Unread',int(body['id'])));audit(c,session['username'],'Changed message read status',{'id':int(body['id']),'read':bool(body.get('read'))})
             return respond({'ok':True})
         if path=='/api/admin/retry-mail' and method=='POST':
-            with db() as c:c.execute('UPDATE outbox SET attempts=0,lease=0,error=\'\' WHERE sent IS NULL')
+            with db() as c:
+                c.execute('UPDATE outbox SET attempts=0,lease=0,error=\'\' WHERE sent IS NULL');audit(c,session['username'],'Retried email alerts')
             return respond({'ok':True})
         if path=='/api/admin/export':
             out=io.StringIO();w=csv.writer(out);w.writerow(['Reference','Name','Email','Phone','Service','Date','Time (Surrey)','Status','Employee ID'])
             with db() as c:
                 for r in c.execute('SELECT id,name,email,phone,service,day,time,status,employee FROM bookings ORDER BY day'):
                     w.writerow([("'"+str(x)) if str(x or '').startswith(('=','+','-','@','\t','\r')) else x for x in r])
+            with db() as c:audit(c,session['username'],'Exported booking CSV')
             headers.append(('Content-Disposition','attachment; filename="suncity-bookings.csv"'));return respond(out.getvalue().encode('utf-8-sig'),mime='text/csv; charset=utf-8')
         if path.startswith('/api/'):return respond({'error':'Not found.'},404)
         if path.startswith('/media/'):
@@ -223,8 +293,9 @@ def employees(public=False):
     with db() as c:
         rows=[dict(r) for r in c.execute('SELECT * FROM employees'+(' WHERE public=1' if public else '')+' ORDER BY name')]
         return [{k:r[k] for k in ('id','name','role','bio')} for r in rows] if public else rows
-def save_settings(s):
-    with db() as c:c.execute('UPDATE settings SET value=? WHERE id=1',(json.dumps(s),))
+def save_settings(s,actor,action,details):
+    with db() as c:
+        c.execute('UPDATE settings SET value=? WHERE id=1',(json.dumps(s),));audit(c,actor,action,details)
 if __name__=='__main__':
     if len(sys.argv)>1 and sys.argv[1]=='setup':
         import getpass
@@ -232,7 +303,8 @@ if __name__=='__main__':
         if not username or len(username)>80 or not 12<=len(password)<=128:sys.exit('Invalid username or password length.')
         if password!=getpass.getpass('Confirm password: '):sys.exit('Passwords do not match.')
         salt=secrets.token_hex(16)
-        with db() as c:c.execute('DELETE FROM admins');c.execute('INSERT INTO admins VALUES(?,?,?)',(username,salt,pw(password,salt)));c.execute('DELETE FROM sessions')
+        with db() as c:
+            c.execute('DELETE FROM admins');c.execute('INSERT INTO admins(username,salt,hash,display_name) VALUES(?,?,?,?)',(username,salt,pw(password,salt),username));c.execute('DELETE FROM sessions');audit(c,'server setup','Reset administrator accounts',{'username':username})
         print('Admin account ready. Any previous admin account was replaced.')
     elif len(sys.argv)>1 and sys.argv[1]=='mail':process_mail()
     else:

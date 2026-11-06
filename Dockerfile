@@ -7,4 +7,4 @@ RUN mkdir /data && chown www-data:www-data /data
 ENV SUNCITY_DATA=/data
 USER www-data
 EXPOSE 8090
-CMD ["python3", "-m", "gunicorn", "--workers", "2", "--bind", "0.0.0.0:8090", "--timeout", "45", "app:application"]
+CMD ["/bin/sh", "-c", "exec python3 -m gunicorn --workers 2 --bind 0.0.0.0:${PORT:-8090} --timeout 45 app:application"]
