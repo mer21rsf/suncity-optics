@@ -16,7 +16,7 @@ class Integration(unittest.TestCase):
         return captured
     def setUp(self):
         with app.db() as c:
-            for t in ('audit','admins','sessions','bookings','messages','employees','outbox','limits'):c.execute('DELETE FROM '+t)
+            for t in ('customer_photos','products','stories','booking_blocks','audit','admins','sessions','bookings','messages','employees','outbox','limits'):c.execute('DELETE FROM '+t)
             c.execute('UPDATE settings SET value=? WHERE id=1',(json.dumps(app.DEFAULT),))
             salt='11'*16;c.execute('INSERT INTO admins(username,salt,hash) VALUES(?,?,?)',('owner',salt,app.pw('a-long-test-password',salt)))
         login=self.call('/api/login',{'username':'owner','password':'a-long-test-password'})

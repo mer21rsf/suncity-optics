@@ -1,3 +1,13 @@
+# Eyeglass enquiries and customer moments
+
+The update also includes an admin-managed **Eyeglass models** gallery (unique codes, search and enquiry buttons) and **Customer photos** slideshow (up to 10, configurable 4/5/7/10-second timing, full-image fit and pause controls). Read **BOOKING_AND_STORIES_UPDATE.md** for the complete feature/update guide. Existing notes, bookings, accounts and settings are preserved.
+
+# Latest features
+
+Read **BOOKING_AND_STORIES_UPDATE.md** for reapplication steps and behavior. Calendar bookings now respect opening hours, service duration and occupied intervals. Admins can delete bookings/messages, clean logs, and approve or remove community notes. The website editor can upload an eyeglass-model or AI-generated featured photo for the “Made for your point of view” area.
+
+Existing Supabase users should deploy the code update without rerunning migration or account setup.
+
 # Sun City Optics — complete local/cloud update
 
 Read **CLOUD_SETUP.md** for the full steps and **../START_HERE.md** in the ZIP for the short checklist.

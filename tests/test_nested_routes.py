@@ -15,7 +15,7 @@ class NestedRoutes(test_app.Integration):
             self.assertEqual(self.call('/suncityoptics/'+suffix)['status'],404,suffix)
         self.assertEqual(self.call('/suncityoptics/api/admin/dashboard')['status'],401)
     def test_nested_assets_and_api(self):
-        for suffix in ('style.css','site.js','admin.js','eyewear.svg','admin'):
+        for suffix in ('style.css','site.js','admin.js','booking.js','stories.js','catalog.js','customer-photos.js','eyewear.svg','admin'):
             self.assertEqual(self.call('/suncityoptics/'+suffix)['status'],200,suffix)
         self.assertIn('services',self.call('/suncityoptics/api/site')['json'])
         r=self.call('/suncityoptics/api/login',{'username':'owner','password':'a-long-test-password'})

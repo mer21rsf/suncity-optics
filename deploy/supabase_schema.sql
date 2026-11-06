@@ -1,4 +1,4 @@
--- Optional: initialize the private app schema in Supabase SQL Editor. No credentials or account data.
+-- Private app schema. No credentials/customer records. Existing rows are retained.
 BEGIN;
 CREATE SCHEMA IF NOT EXISTS suncity;
 REVOKE ALL ON SCHEMA suncity FROM PUBLIC;
@@ -7,10 +7,15 @@ CREATE TABLE IF NOT EXISTS suncity.admins (username TEXT PRIMARY KEY,salt TEXT,h
 CREATE TABLE IF NOT EXISTS suncity.sessions (token TEXT PRIMARY KEY,csrf TEXT,expires DOUBLE PRECISION,username TEXT);
 CREATE TABLE IF NOT EXISTS suncity.limits (key TEXT PRIMARY KEY,count INTEGER,until DOUBLE PRECISION);
 CREATE TABLE IF NOT EXISTS suncity.employees (id BIGSERIAL PRIMARY KEY,name TEXT,role TEXT,email TEXT,phone TEXT,bio TEXT,public INTEGER);
-CREATE TABLE IF NOT EXISTS suncity.bookings (id BIGSERIAL PRIMARY KEY,name TEXT,email TEXT,phone TEXT,service TEXT,day TEXT,time TEXT,status TEXT DEFAULT 'Requested',employee BIGINT,created TEXT);
+CREATE TABLE IF NOT EXISTS suncity.bookings (id BIGSERIAL PRIMARY KEY,name TEXT,email TEXT,phone TEXT,service TEXT,day TEXT,time TEXT,status TEXT DEFAULT 'Requested',employee BIGINT,created TEXT,minutes INTEGER);
+CREATE TABLE IF NOT EXISTS suncity.customer_photos (id BIGSERIAL PRIMARY KEY,title TEXT,caption TEXT,image TEXT,alt TEXT,sort_order INTEGER DEFAULT 0,visible INTEGER DEFAULT 1,consent INTEGER DEFAULT 0,created TEXT);
+CREATE TABLE IF NOT EXISTS suncity.products (id BIGSERIAL PRIMARY KEY,code TEXT UNIQUE,name TEXT,description TEXT,image TEXT,visible INTEGER DEFAULT 1,created TEXT);
+CREATE TABLE IF NOT EXISTS suncity.stories (id BIGSERIAL PRIMARY KEY,name TEXT,email TEXT,note TEXT,status TEXT DEFAULT 'Pending',consent INTEGER DEFAULT 0,created TEXT);
+CREATE TABLE IF NOT EXISTS suncity.booking_blocks (id BIGSERIAL PRIMARY KEY,day TEXT,start_time TEXT,end_time TEXT,label TEXT,created TEXT);
 CREATE TABLE IF NOT EXISTS suncity.messages (id BIGSERIAL PRIMARY KEY,name TEXT,email TEXT,message TEXT,status TEXT DEFAULT 'Unread',created TEXT);
 CREATE TABLE IF NOT EXISTS suncity.outbox (id BIGSERIAL PRIMARY KEY,recipient TEXT,kind TEXT,record_id BIGINT,sent DOUBLE PRECISION,attempts INTEGER DEFAULT 0,error TEXT DEFAULT '',lease DOUBLE PRECISION DEFAULT 0);
 CREATE TABLE IF NOT EXISTS suncity.audit (id BIGSERIAL PRIMARY KEY,created TEXT,actor TEXT,action TEXT,details TEXT);
+ALTER TABLE suncity.bookings ADD COLUMN IF NOT EXISTS minutes INTEGER;
 REVOKE ALL ON ALL TABLES IN SCHEMA suncity FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA suncity FROM PUBLIC;
 COMMIT;

@@ -21,7 +21,7 @@ tar -czf "$BACKUP_DIR/code-$STAMP.tar.gz" --exclude='./data' --exclude='./__pyca
 if [ -f "$TARGET_DIR/data/site.sqlite3" ]; then
     python3 "$SOURCE_DIR/backup_local.py" --source "$TARGET_DIR/data" --output "$BACKUP_DIR/data-$STAMP.zip"
 fi
-python3 -m py_compile "$SOURCE_DIR/app.py" "$SOURCE_DIR/persistence.py" "$SOURCE_DIR/cloud_media.py" "$SOURCE_DIR/data_tools.py" "$SOURCE_DIR/mailer.py"
+python3 -m py_compile "$SOURCE_DIR/app.py" "$SOURCE_DIR/persistence.py" "$SOURCE_DIR/cloud_media.py" "$SOURCE_DIR/data_tools.py" "$SOURCE_DIR/mailer.py" "$SOURCE_DIR/scheduling.py"
 STOPPED=0
 rollback_update() {
     RESULT=$?
@@ -35,13 +35,13 @@ trap rollback_update EXIT
 systemctl stop suncity-mail.timer suncity-mail.service suncity-optics
 STOPPED=1
 # Preserve site.env, data/, the existing accounts and the family homepage.
-for FILE in app.py docx_import.py persistence.py cloud_media.py data_tools.py mailer.py migrate_to_supabase.py backup_local.py admin.html admin.js index.html style.css site.js eyewear.svg requirements.txt README.md CLOUD_SETUP.md; do
+for FILE in app.py docx_import.py persistence.py cloud_media.py data_tools.py mailer.py scheduling.py migrate_to_supabase.py backup_local.py admin.html admin.js index.html style.css site.js booking.js stories.js catalog.js customer-photos.js eyewear.svg requirements.txt README.md CLOUD_SETUP.md BOOKING_AND_STORIES_UPDATE.md; do
     cp "$SOURCE_DIR/$FILE" "$TARGET_DIR/$FILE"
     chown root:www-data "$TARGET_DIR/$FILE"
     chmod 640 "$TARGET_DIR/$FILE"
 done
 cp "$SOURCE_DIR/deploy/cloud.env.example" "$TARGET_DIR/deploy/cloud.env.example"
-python3 -m py_compile "$TARGET_DIR/app.py" "$TARGET_DIR/persistence.py" "$TARGET_DIR/cloud_media.py" "$TARGET_DIR/data_tools.py" "$TARGET_DIR/mailer.py"
+python3 -m py_compile "$TARGET_DIR/app.py" "$TARGET_DIR/persistence.py" "$TARGET_DIR/cloud_media.py" "$TARGET_DIR/data_tools.py" "$TARGET_DIR/mailer.py" "$TARGET_DIR/scheduling.py"
 systemctl start suncity-optics suncity-mail.timer
 STOPPED=0
 echo 'Updated. Existing accounts, data and site.env were preserved.'

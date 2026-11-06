@@ -9,6 +9,8 @@ from persistence import connect, initialize, cloud_enabled, StorageUnavailable
 from cloud_media import MediaStore
 from data_tools import backup_bytes
 from mailer import send_https
+from urllib.parse import parse_qs
+import scheduling
 BASE=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('SUNCITY_DATA',str(BASE/'data'))); DATA.mkdir(parents=True,exist_ok=True,mode=0o700)
 MEDIA_DIR=DATA/'media'; MEDIA_DIR.mkdir(exist_ok=True)
@@ -16,7 +18,7 @@ MEDIA=MediaStore(MEDIA_DIR)
 ORIGIN=(os.environ.get('PUBLIC_ORIGIN') or os.environ.get('RENDER_EXTERNAL_URL') or 'http://localhost:8090').rstrip('/')
 TZ=ZoneInfo('America/Vancouver')
 SERVICES=[{'name':n,'minutes':m,'description':d} for n,m,d in [('Eyeglasses Adjustment',30,'A better fit, a little more comfort.'),('Contact Lens Fitting',30,'Find a fit that feels right for you.'),('Safety Glasses Fitting',60,'Practical protection for your working day.'),('Sight Test',60,'Make time for your vision needs.'),('Eyewear Shopping',60,'Explore frames and find your next favourite.'),('Lens Change or Upgrade',60,'Give your everyday eyewear a fresh perspective.')]]
-DEFAULT={'name':'Sun City Optics','eyebrow':'YOUR NEIGHBOURHOOD OPTICAL · SURREY, BC','headline':'See beautifully.\nLive brightly.','intro':'Find frames that feel like you. Discover thoughtfully chosen eyewear and friendly, personal service in the heart of Newton.','about':'Your view of the world deserves a little care. We bring together a wide choice of frames and lenses, accessible prices, and a friendly team to help you find your fit.','phone':'+1 604 355 1337','email':'suncityoptics@gmail.com','address':'Unit 125, 7135 138 Street, Surrey, BC V3W 7T9','facebook':'https://www.facebook.com/suncityoptics.surrey/','setmore':'https://suncityoptics.setmore.com/','hours':['11:00–15:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','08:00–16:00'],'services':SERVICES,'recipients':['','',''],'accent':'#d27140','hero_image':'','page_mode':'designed','doc_draft':'','doc_live':''}
+DEFAULT={'name':'Sun City Optics','eyebrow':'YOUR NEIGHBOURHOOD OPTICAL · SURREY, BC','headline':'See beautifully.\nLive brightly.','intro':'Find frames that feel like you. Discover thoughtfully chosen eyewear and friendly, personal service in the heart of Newton.','about':'Your view of the world deserves a little care. We bring together a wide choice of frames and lenses, accessible prices, and a friendly team to help you find your fit.','phone':'+1 604 355 1337','email':'suncityoptics@gmail.com','address':'Unit 125, 7135 138 Street, Surrey, BC V3W 7T9','facebook':'https://www.facebook.com/suncityoptics.surrey/','setmore':'https://suncityoptics.setmore.com/','hours':['11:00–15:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','09:00–17:00','08:00–16:00'],'services':SERVICES,'recipients':['','',''],'accent':'#d27140','customer_slide_seconds':5,'hero_image':'','hero_alt':'Featured eyewear at Sun City Optics','page_mode':'designed','doc_draft':'','doc_live':''}
 def db():return connect(DATA)
 def init():
     initialize(DATA,DEFAULT)
@@ -93,7 +95,7 @@ def application(env,start):
         if path.startswith('/api/admin') and not session:return respond({'error':'Please sign in.'},401)
         if session and session['must_change'] and path.startswith('/api/admin') and path not in ('/api/admin/session','/api/admin/password','/api/admin/logout'):
             return respond({'error':'Change your temporary password before continuing.','code':'password_change_required'},403)
-        if path in ('/api/admin/users','/api/admin/user','/api/admin/audit','/api/admin/retry-mail') and session and session['role']!='admin':
+        if path in ('/api/admin/users','/api/admin/user','/api/admin/audit','/api/admin/retry-mail','/api/admin/delete-record','/api/admin/clear-history','/api/admin/story','/api/admin/product','/api/admin/product-image','/api/admin/customer-photo','/api/admin/customer-photo-image') and session and session['role']!='admin':
             return respond({'error':'An administrator account is required.'},403)
         if method not in ('GET','POST'):return respond({'error':'Unsupported request.'},400)
         if method=='POST':
@@ -102,7 +104,35 @@ def application(env,start):
             length=int(env.get('CONTENT_LENGTH') or 0)
             if length<0 or length>10*1024*1024:return respond({'error':'Upload must be under 10 MB.'},413)
             raw=env['wsgi.input'].read(length)
-            body={} if path=='/api/admin/word' else json.loads(raw or b'{}')
+            body={} if path in ('/api/admin/word','/api/admin/hero-image','/api/admin/product-image','/api/admin/customer-photo-image') else json.loads(raw or b'{}')
+        if path=='/api/availability':
+            query=parse_qs(env.get('QUERY_STRING',''))
+            with db() as c:result=scheduling.month_availability(c,settings(),query.get('service',[''])[0],query.get('month',[None])[0])
+            return respond(result)
+        if path=='/api/customer-photos':
+            with db() as c:photos=[dict(r) for r in c.execute('SELECT id,title,caption,image,alt FROM customer_photos WHERE visible=1 AND consent=1 ORDER BY sort_order,id LIMIT 10')]
+            return respond({'photos':photos,'seconds':settings().get('customer_slide_seconds',5)})
+        if path=='/api/products':
+            query=parse_qs(env.get('QUERY_STRING',''));offset=max(0,int(query.get('offset',['0'])[0]));term=clean(query.get('q',[''])[0],80).lower();params=[];where=' WHERE visible=1'
+            if term:where+=' AND (lower(code) LIKE ? OR lower(name) LIKE ?)';params=['%'+term+'%','%'+term+'%']
+            with db() as c:rows=[dict(r) for r in c.execute('SELECT id,code,name,description,image FROM products'+where+' ORDER BY id DESC LIMIT ? OFFSET ?',tuple(params+[7,offset]))]
+            return respond({'products':rows[:6],'has_more':len(rows)>6,'offset':offset})
+        if path=='/api/stories':
+            query=parse_qs(env.get('QUERY_STRING',''));offset=max(0,int(query.get('offset',['0'])[0]));count=9
+            with db() as c:
+                rows=[dict(r) for r in c.execute("SELECT id,name,note,created FROM stories WHERE status='Approved' AND consent=1 ORDER BY id DESC LIMIT ? OFFSET ?",(count+1,offset))]
+            return respond({'stories':rows[:count],'has_more':len(rows)>count,'offset':offset})
+        if path=='/api/story' and method=='POST':
+            if body.get('website'):raise ValueError('Unable to submit.')
+            name=str(body.get('name','')).strip();note=str(body.get('note','')).strip();address=clean(body.get('email'),254)
+            if not 1<=len(name)<=40 or not 1<=len(note)<=600:raise ValueError('Enter your first name or initials (up to 40 characters) and a note (up to 600 characters).')
+            if address and not email(address):raise ValueError('Check your email address or leave it blank.')
+            if body.get('consent') not in (True,1,'on','true','1'):raise ValueError('Please agree to publishing your name and note if approved.')
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if not limit(c,'story:'+env.get('REMOTE_ADDR','')+':'+hashlib.sha256((address or name).lower().encode()).hexdigest()[:16],5,86400) or not limit(c,'story-ip:'+env.get('REMOTE_ADDR',''),200,86400):return respond({'error':'You have reached the note limit. Please try again tomorrow.'},429)
+                rid=c.execute('INSERT INTO stories(name,email,note,status,consent,created) VALUES(?,?,?,?,?,?)',(name,address,note,'Pending',1,datetime.now(TZ).isoformat())).lastrowid;queue(c,'story note',rid)
+            return respond({'ok':True,'reference':rid,'status':'Pending'})
         if path=='/api/site':
             s=settings();return respond({k:v for k,v in s.items() if k not in ('recipients','doc_draft','doc_live')} | {'word_html':s['doc_live'] if s['page_mode']=='word' else '', 'employees':employees(True)})
         if path=='/api/login' and method=='POST':
@@ -162,23 +192,107 @@ def application(env,start):
             name=clean(body.get('name'),100);address=clean(body.get('email'),254)
             if not name or not email(address):raise ValueError('Enter your name and a valid email address.')
             with db() as c:
-                if not limit(c,'submit:'+env.get('REMOTE_ADDR',''),8,3600):return respond({'error':'Too many requests. Please call the shop.'},429)
+                c.execute('BEGIN IMMEDIATE')
+                if not limit(c,'submit:'+env.get('REMOTE_ADDR','')+':'+hashlib.sha256(address.lower().encode()).hexdigest()[:16],8,3600) or not limit(c,'submit-ip:'+env.get('REMOTE_ADDR',''),200,3600):return respond({'error':'Too many requests. Please call the shop.'},429)
                 if path=='/api/book':
                     service=clean(body.get('service'),100);day=clean(body.get('day'),10);clock=clean(body.get('time'),5);phone=clean(body.get('phone'),40)
-                    if service not in [x['name'] for x in settings()['services']]:raise ValueError('Select an available service.')
-                    try:dt=datetime.strptime(day+' '+clock,'%Y-%m-%d %H:%M').replace(tzinfo=TZ)
-                    except ValueError:raise ValueError('Select a valid date and time.')
-                    if dt<=datetime.now(TZ) or dt>datetime.now(TZ)+timedelta(days=180):raise ValueError('Choose a future time within 180 days.')
                     if not phone:raise ValueError('Enter a contact number.')
-                    schedule=settings()['hours'][(dt.weekday()+1)%7]
-                    matches=re.fullmatch(r'(\d{2}:\d{2})[–-](\d{2}:\d{2})',schedule)
-                    if not matches or not matches[1]<=clock<matches[2]:raise ValueError('Choose a time during the displayed shop hours.')
-                    rid=c.execute('INSERT INTO bookings(name,email,phone,service,day,time,created) VALUES(?,?,?,?,?,?,?)',(name,address,phone,service,day,clock,datetime.now(TZ).isoformat())).lastrowid;queue(c,'booking request',rid)
+                    minutes=scheduling.validate_slot(c,settings(),service,day,clock)
+                    rid=c.execute('INSERT INTO bookings(name,email,phone,service,day,time,created,minutes) VALUES(?,?,?,?,?,?,?,?)',(name,address,phone,service,day,clock,datetime.now(TZ).isoformat(),minutes)).lastrowid;queue(c,'booking request',rid)
                 else:
                     message=clean(body.get('message'),3000)
                     if not message:raise ValueError('Please enter a message.')
                     rid=c.execute('INSERT INTO messages(name,email,message,created) VALUES(?,?,?,?)',(name,address,message,datetime.now(TZ).isoformat())).lastrowid;queue(c,'chat message',rid)
             return respond({'ok':True,'reference':rid})
+        if path=='/api/admin/customer-photo' and method=='POST':
+            rid=int(body.get('id') or 0)
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if rid and not c.execute('SELECT id FROM customer_photos WHERE id=?',(rid,)).fetchone():return respond({'error':'Customer photo not found.'},404)
+                if body.get('delete'):
+                    if not rid:raise ValueError('Choose a photo to delete.')
+                    c.execute('DELETE FROM customer_photos WHERE id=?',(rid,));audit(c,session['username'],'Deleted customer photo',{'id':rid})
+                else:
+                    if not rid and c.execute('SELECT count(*) FROM customer_photos').fetchone()[0]>=10:raise ValueError('Ten photos are already saved. Replace or delete one before adding another.')
+                    image=clean(body.get('image'),2000);alt=clean(body.get('alt'),150);title=clean(body.get('title'),100);caption=clean(body.get('caption'),400);sort_order=int(body.get('sort_order') or 0);visible=int(bool(body.get('visible',True)));consent=int(body.get('consent') in (True,1,'on','true','1'))
+                    if not 0<=sort_order<=99 or not alt or not consent:raise ValueError('Add a photo description, order (0–99) and permission to publish.')
+                    if not image or not (re.fullmatch(r'/suncityoptics/media/[a-f0-9]{64}\.(png|jpg|gif|webp)',image) or re.match(r'^https://[^\s]+$',image)):raise ValueError('Upload a customer photo or use its HTTPS image URL.')
+                    values=(title,caption,image,alt,sort_order,visible,consent)
+                    if rid:c.execute('UPDATE customer_photos SET title=?,caption=?,image=?,alt=?,sort_order=?,visible=?,consent=? WHERE id=?',values+(rid,))
+                    else:rid=c.execute('INSERT INTO customer_photos(title,caption,image,alt,sort_order,visible,consent,created) VALUES(?,?,?,?,?,?,?,?)',values+(datetime.now(TZ).isoformat(),)).lastrowid
+                    audit(c,session['username'],'Saved customer photo',{'id':rid,'visible':bool(visible),'sort_order':sort_order})
+            return respond({'ok':True,'id':rid})
+        if path=='/api/admin/product' and method=='POST':
+            rid=int(body.get('id') or 0)
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if rid and not c.execute('SELECT id FROM products WHERE id=?',(rid,)).fetchone():return respond({'error':'Eyeglass model not found.'},404)
+                if body.get('delete'):
+                    if not rid:raise ValueError('Choose a model to delete.')
+                    c.execute('DELETE FROM products WHERE id=?',(rid,));audit(c,session['username'],'Deleted eyeglass model',{'id':rid})
+                else:
+                    code=clean(body.get('code'),40).upper();name=clean(body.get('name'),100);description=clean(body.get('description'),400);image=clean(body.get('image'),2000);visible=int(bool(body.get('visible',True)))
+                    if not re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{0,39}',code) or not name:raise ValueError('Enter a unique model code (letters, digits, dash or underscore) and a model name.')
+                    if not image or not (re.fullmatch(r'/suncityoptics/media/[a-f0-9]{64}\.(png|jpg|gif|webp)',image) or re.match(r'^https://[^\s]+$',image)):raise ValueError('Upload a model photo or enter its HTTPS image URL.')
+                    if c.execute('SELECT id FROM products WHERE code=? AND id<>?',(code,rid)).fetchone():return respond({'error':'That model code already exists. Choose another code.'},409)
+                    if rid:c.execute('UPDATE products SET code=?,name=?,description=?,image=?,visible=? WHERE id=?',(code,name,description,image,visible,rid))
+                    else:rid=c.execute('INSERT INTO products(code,name,description,image,visible,created) VALUES(?,?,?,?,?,?)',(code,name,description,image,visible,datetime.now(TZ).isoformat())).lastrowid
+                    audit(c,session['username'],'Saved eyeglass model',{'id':rid,'code':code,'visible':bool(visible)})
+            return respond({'ok':True,'id':rid})
+        if path=='/api/admin/story' and method=='POST':
+            rid=int(body.get('id',0))
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE');row=c.execute('SELECT * FROM stories WHERE id=?',(rid,)).fetchone()
+                if not row:return respond({'error':'Note not found.'},404)
+                if body.get('delete'):
+                    c.execute('DELETE FROM stories WHERE id=?',(rid,));c.execute('DELETE FROM outbox WHERE kind=? AND record_id=?',('story note',rid));action='Deleted story note'
+                else:
+                    status=body.get('status')
+                    if status not in ('Pending','Approved','Rejected'):raise ValueError('Invalid note status.')
+                    if status=='Approved' and row['consent']!=1:raise ValueError('This note does not have publication consent.')
+                    c.execute('UPDATE stories SET status=? WHERE id=?',(status,rid));action='Story note '+status.lower()
+                audit(c,session['username'],action,{'id':rid})
+            return respond({'ok':True})
+        if path=='/api/admin/delete-record' and method=='POST':
+            kind=body.get('type');rid=int(body.get('id',0));table={'booking':'bookings','message':'messages'}.get(kind)
+            if not table or rid<=0:raise ValueError('Choose a valid record.')
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if not c.execute('SELECT id FROM '+table+' WHERE id=?',(rid,)).fetchone():return respond({'error':'Record not found.'},404)
+                c.execute('DELETE FROM '+table+' WHERE id=?',(rid,));c.execute('DELETE FROM outbox WHERE kind=? AND record_id=?',('booking request' if kind=='booking' else 'chat message',rid));audit(c,session['username'],'Deleted '+kind,{'id':rid})
+            return respond({'ok':True})
+        if path=='/api/admin/clear-history' and method=='POST':
+            mode=body.get('mode')
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if mode=='all':where='';params=()
+                elif mode=='older':
+                    days=int(body.get('days',30))
+                    if days not in (7,30,90,180):raise ValueError('Choose a supported retention period.')
+                    where=' WHERE created<?';params=((datetime.now(TZ)-timedelta(days=days)).isoformat(),)
+                elif mode=='selected':
+                    values=body.get('ids',[])
+                    if not isinstance(values,list) or not 1<=len(values)<=500:raise ValueError('Select up to 500 log entries.')
+                    ids=sorted(set(int(v) for v in values))
+                    if any(v<=0 for v in ids):raise ValueError('Invalid log selection.')
+                    where=' WHERE id IN ('+','.join('?' for _ in ids)+')';params=tuple(ids)
+                else:raise ValueError('Choose a log cleanup method.')
+                removed=c.execute('SELECT count(*) FROM audit'+where,params).fetchone()[0];c.execute('DELETE FROM audit'+where,params);audit(c,session['username'],'Cleaned change history',{'mode':mode,'removed':removed})
+            return respond({'ok':True,'removed':removed})
+        if path=='/api/admin/calendar-block' and method=='POST':
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if body.get('delete'):
+                    rid=int(body.get('id',0));c.execute('DELETE FROM booking_blocks WHERE id=?',(rid,));audit(c,session['username'],'Removed calendar block',{'id':rid})
+                else:
+                    day=clean(body.get('day'),10);parsed=scheduling.parse_day(day)
+                    if not datetime.now(TZ).date()<=parsed<=datetime.now(TZ).date()+timedelta(days=180):raise ValueError('Choose a date within the next 180 days.')
+                    block_start=0 if body.get('all_day') else scheduling.clock_minutes(clean(body.get('start'),5));block_end=1440 if body.get('all_day') else scheduling.clock_minutes(clean(body.get('end'),5))
+                    if block_start>=block_end:raise ValueError('Block end must be after its start.')
+                    if scheduling.overlaps(block_start,block_end,scheduling.intervals(c,day)):raise scheduling.SlotConflict('This block overlaps an existing appointment or block. Review those records first.')
+                    label=clean(body.get('label'),100) or 'Unavailable'
+                    rid=c.execute('INSERT INTO booking_blocks(day,start_time,end_time,label,created) VALUES(?,?,?,?,?)',(day,scheduling.clock_text(block_start),scheduling.clock_text(block_end),label,datetime.now(TZ).isoformat())).lastrowid;audit(c,session['username'],'Added calendar block',{'id':rid,'day':day,'start':scheduling.clock_text(block_start),'end':scheduling.clock_text(block_end)})
+            return respond({'ok':True})
         if path=='/api/admin/backup':
             if session['role']!='admin':return respond({'error':'An administrator account is required.'},403)
             with db() as c:audit(c,session['username'],'Downloaded private backup')
@@ -192,14 +306,14 @@ def application(env,start):
             return respond({'mode':'supabase' if cloud_enabled() else 'local','database':'Available','images':image_status})
         if path=='/api/admin/dashboard':
             with db() as c:
-                return respond({'user':account_info(session),'preview':os.environ.get('IS_FREE_PREVIEW')=='1' and not cloud_enabled(),'storage':{'mode':'supabase' if cloud_enabled() else 'local','persistent':cloud_enabled()},'settings':settings(),'employees':employees(),'bookings':[dict(r) for r in c.execute('SELECT * FROM bookings ORDER BY day DESC,time DESC')],'messages':[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY id DESC')],'mail':{'configured':bool((os.environ.get('RESEND_API_KEY') and (os.environ.get('MAIL_FROM') or os.environ.get('SMTP_FROM'))) or (os.environ.get('SMTP_HOST') and os.environ.get('SMTP_FROM'))),'queued':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL').fetchone()[0],'failed':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL AND attempts>0').fetchone()[0]}})
+                return respond({'user':account_info(session),'preview':os.environ.get('IS_FREE_PREVIEW')=='1' and not cloud_enabled(),'storage':{'mode':'supabase' if cloud_enabled() else 'local','persistent':cloud_enabled()},'settings':settings(),'customer_photos':[dict(r) for r in c.execute('SELECT * FROM customer_photos ORDER BY sort_order,id')] if session['role']=='admin' else [],'products':[dict(r) for r in c.execute('SELECT * FROM products ORDER BY id DESC')] if session['role']=='admin' else [],'calendar_blocks':[dict(r) for r in c.execute('SELECT * FROM booking_blocks ORDER BY day,start_time')],'booking_issues':scheduling.booking_issues(c.execute('SELECT * FROM bookings').fetchall(),settings()),'stories':[dict(r) for r in c.execute('SELECT * FROM stories ORDER BY id DESC')] if session['role']=='admin' else [],'employees':employees(),'bookings':[dict(r) for r in c.execute('SELECT * FROM bookings ORDER BY day DESC,time DESC')],'messages':[dict(r) for r in c.execute('SELECT * FROM messages ORDER BY id DESC')],'mail':{'configured':bool((os.environ.get('RESEND_API_KEY') and (os.environ.get('MAIL_FROM') or os.environ.get('SMTP_FROM'))) or (os.environ.get('SMTP_HOST') and os.environ.get('SMTP_FROM'))),'queued':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL').fetchone()[0],'failed':c.execute('SELECT count(*) FROM outbox WHERE sent IS NULL AND attempts>0').fetchone()[0]}})
         if path=='/api/admin/settings' and method=='POST':
             if session['role']!='admin' and 'recipients' in body:return respond({'error':'Only administrators can change alert recipients.'},403)
             s=settings();previous=json.loads(json.dumps(s))
-            for k in ('name','eyebrow','headline','intro','about','phone','email','address'):s[k]=clean(body.get(k,s[k]),3000 if k=='about' else 600)
+            for k in ('name','eyebrow','headline','intro','about','phone','email','address','hero_alt'):s[k]=clean(body.get(k,s[k]),3000 if k=='about' else 600)
             for k in ('facebook','setmore','hero_image'):
                 v=clean(body.get(k,s[k]),2000)
-                if v and not re.match(r'^https://[^\s]+$',v):raise ValueError(k+' must be an HTTPS URL.')
+                if v and not (re.match(r'^https://[^\s]+$',v) or (k=='hero_image' and re.fullmatch(r'/suncityoptics/media/[a-f0-9]{64}\.(png|jpg|gif|webp)',v))):raise ValueError(k+' must be an HTTPS URL.')
                 s[k]=v
             col=body.get('accent',s['accent'])
             if not re.fullmatch('#[0-9a-fA-F]{6}',col):raise ValueError('Invalid accent colour.')
@@ -225,8 +339,23 @@ def application(env,start):
                     n=clean(item.get('name'),100);mins=int(item.get('minutes',30))
                     if not n or not 5<=mins<=240:raise ValueError('Service names and durations (5–240 minutes) are required.')
                     s['services'].append({'name':n,'minutes':mins,'description':clean(item.get('description'),300)})
+            if 'customer_slide_seconds' in body:
+                seconds=int(body['customer_slide_seconds'])
+                if seconds not in (4,5,7,10):raise ValueError('Choose a slideshow interval of 4, 5, 7 or 10 seconds.')
+                s['customer_slide_seconds']=seconds
+            if len({x['name'] for x in s['services']})!=len(s['services']):raise ValueError('Service names must be unique.')
             changed={k:{'before':str(previous.get(k,''))[:400],'after':str(s[k])[:400]} for k in body if k in s and previous.get(k)!=s[k]}
             save_settings(s,session['username'],'Edited website settings',changed);return respond({'ok':True})
+        if path in ('/api/admin/hero-image','/api/admin/product-image','/api/admin/customer-photo-image') and method=='POST':
+            if not raw or len(raw)>8*1024*1024:raise ValueError('Choose a photo smaller than 8 MB.')
+            extension='png' if raw.startswith(b'\x89PNG\r\n\x1a\n') else 'jpg' if raw.startswith(b'\xff\xd8\xff') else 'gif' if raw.startswith((b'GIF87a',b'GIF89a')) else 'webp' if raw.startswith(b'RIFF') and raw[8:12]==b'WEBP' else None
+            if not extension:raise ValueError('Use a JPG, PNG, GIF or WebP image.')
+            name=hashlib.sha256(raw).hexdigest()+'.'+extension;(MEDIA/name).write_bytes(raw)
+            if path in ('/api/admin/product-image','/api/admin/customer-photo-image'):
+                with db() as c:audit(c,session['username'],'Uploaded '+('customer' if path.endswith('customer-photo-image') else 'eyeglass model')+' photo',{'image':name})
+                return respond({'ok':True,'image':'/suncityoptics/media/'+name})
+            s=settings();s['hero_image']='/suncityoptics/media/'+name;save_settings(s,session['username'],'Changed featured photo',{'image':name})
+            return respond({'ok':True,'image':s['hero_image']})
         if path=='/api/admin/word' and method=='POST':
             s=settings()
             try:s['doc_draft']=convert(raw,MEDIA)
@@ -262,10 +391,13 @@ def application(env,start):
             status=body.get('status');employee=int(body.get('employee') or 0) or None
             if status not in ('Requested','Confirmed','Completed','Cancelled'):raise ValueError('Invalid status.')
             with db() as c:
+                c.execute('BEGIN IMMEDIATE')
                 if employee and not c.execute('SELECT id FROM employees WHERE id=?',(employee,)).fetchone():raise ValueError('Employee no longer exists.')
-                old=c.execute('SELECT status,employee FROM bookings WHERE id=?',(int(body['id']),)).fetchone()
+                old=c.execute('SELECT * FROM bookings WHERE id=?',(int(body['id']),)).fetchone()
                 if not old:raise ValueError('Booking not found.')
-                c.execute('UPDATE bookings SET status=?,employee=? WHERE id=?',(status,employee,int(body['id'])));audit(c,session['username'],'Updated booking',{'id':int(body['id']),'before':dict(old),'after':{'status':status,'employee':employee}})
+                if status in scheduling.ACTIVE:
+                    scheduling.validate_slot(c,settings(),old['service'],old['day'],old['time'],exclude=int(body['id']),minutes=old['minutes'] or 60,require_future=False)
+                c.execute('UPDATE bookings SET status=?,employee=? WHERE id=?',(status,employee,int(body['id'])));audit(c,session['username'],'Updated booking',{'id':int(body['id']),'before':{'status':old['status'],'employee':old['employee']},'after':{'status':status,'employee':employee}})
             return respond({'ok':True})
         if path=='/api/admin/message' and method=='POST':
             with db() as c:
@@ -276,9 +408,9 @@ def application(env,start):
                 c.execute('UPDATE outbox SET attempts=0,lease=0,error=\'\' WHERE sent IS NULL');audit(c,session['username'],'Retried email alerts')
             return respond({'ok':True})
         if path=='/api/admin/export':
-            out=io.StringIO();w=csv.writer(out);w.writerow(['Reference','Name','Email','Phone','Service','Date','Time (Surrey)','Status','Employee ID'])
+            out=io.StringIO();w=csv.writer(out);w.writerow(['Reference','Name','Email','Phone','Service','Duration (minutes)','Date','Time (Surrey)','Status','Employee ID'])
             with db() as c:
-                for r in c.execute('SELECT id,name,email,phone,service,day,time,status,employee FROM bookings ORDER BY day'):
+                for r in c.execute('SELECT id,name,email,phone,service,minutes,day,time,status,employee FROM bookings ORDER BY day'):
                     w.writerow([("'"+str(x)) if str(x or '').startswith(('=','+','-','@','\t','\r')) else x for x in r])
             with db() as c:audit(c,session['username'],'Exported booking CSV')
             headers.append(('Content-Disposition','attachment; filename="suncity-bookings.csv"'));return respond(out.getvalue().encode('utf-8-sig'),mime='text/csv; charset=utf-8')
@@ -289,11 +421,12 @@ def application(env,start):
             try:return respond((MEDIA/name).read_bytes(),mime=mimetypes.guess_type(name)[0] or 'application/octet-stream')
             except FileNotFoundError:return respond({'error':'Not found.'},404)
         else:
-            names={'/':'index.html','/index.html':'index.html','/admin':'admin.html','/admin/':'admin.html','/style.css':'style.css','/site.js':'site.js','/admin.js':'admin.js','/eyewear.svg':'eyewear.svg'}
+            names={'/':'index.html','/index.html':'index.html','/admin':'admin.html','/admin/':'admin.html','/style.css':'style.css','/site.js':'site.js','/admin.js':'admin.js','/booking.js':'booking.js','/stories.js':'stories.js','/catalog.js':'catalog.js','/customer-photos.js':'customer-photos.js','/eyewear.svg':'eyewear.svg'}
             if path not in names:return respond({'error':'Not found.'},404)
             file=(BASE if (BASE/'index.html').is_file() else BASE/'public')/names[path]
         if not file.is_file():return respond({'error':'Not found.'},404)
         return respond(file.read_bytes(),mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+    except scheduling.SlotConflict as e:return respond({'error':str(e)},409)
     except StorageUnavailable as e:return respond({'error':str(e)},503)
     except (ValueError,KeyError,TypeError,OverflowError) as e:return respond({'error':str(e) if isinstance(e,ValueError) else 'Invalid request data.'},400)
     except Exception:
@@ -304,6 +437,7 @@ def employees(public=False):
         return [{k:r[k] for k in ('id','name','role','bio')} for r in rows] if public else rows
 def save_settings(s,actor,action,details):
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
         c.execute('UPDATE settings SET value=? WHERE id=1',(json.dumps(s),));audit(c,actor,action,details)
 def start_mail_worker():
     if os.environ.get('MAIL_AUTORUN')!='1':return

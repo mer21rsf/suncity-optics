@@ -89,7 +89,7 @@ class CloudFeatures(test_app.Integration):
         fake=types.ModuleType('psycopg');rows=types.ModuleType('psycopg.rows');rows.dict_row=object()
         class DbError(Exception):pass
         fake.Error=DbError;raw=MagicMock();fake.connect=MagicMock(return_value=raw)
-        with patch.dict(sys.modules,{'psycopg':fake,'psycopg.rows':rows}),patch.dict(os.environ,{'STORAGE_MODE':'supabase','DATABASE_URL':'postgresql://server-only-secret'}):
+        with patch.dict(sys.modules,{'psycopg':fake,'psycopg.rows':rows}),patch.dict(os.environ,{'STORAGE_MODE':'supabase','DATABASE_URL':'postgresql://testuser:testpassword@example.invalid:5432/postgres'}):
             with persistence.connect(app.DATA) as c:c.execute('SELECT 1')
             self.assertEqual(fake.connect.call_args.kwargs['sslmode'],'verify-full')
             self.assertIsNone(fake.connect.call_args.kwargs['prepare_threshold'])

@@ -5,7 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from persistence import connect,initialize,cloud_enabled,AUTO_TABLES,StorageUnavailable
 from cloud_media import MediaStore,IMAGE
-RECORD_TABLES=('settings','admins','employees','bookings','messages','outbox','audit')
+RECORD_TABLES=('settings','admins','employees','bookings','messages','outbox','audit','booking_blocks','stories','products','customer_photos')
 MAX_BACKUP=32*1024*1024
 
 def load_env_file(path):
@@ -32,7 +32,7 @@ def sqlite_records(source):
     return result
 
 def referenced_images(records):
-    content=json.dumps(records.get('settings',[]))
+    content=json.dumps({'settings':records.get('settings',[]),'products':records.get('products',[]),'customer_photos':records.get('customer_photos',[])})
     return sorted(set(re.findall(r'/(?:suncityoptics/)?media/([a-f0-9]{64}\.(?:png|jpg|gif|webp))',content)))
 
 def backup_bytes(data,media):
